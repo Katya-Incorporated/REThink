@@ -185,7 +185,7 @@ dependencies {
         exclude group: 'glide-parent'
     }
     // Ref - https://stackoverflow.com/questions/46638056/how-to-use-glidemodule-on-glide-4/46638213#46638213
-    kspFull 'com.github.bumptech.glide:compiler:4.15.1'
+    kspFull 'com.github.bumptech.glide:compiler:4.16.0'
 
     // Swipe button animation
     fullImplementation 'com.facebook.shimmer:shimmer:0.5.0'
