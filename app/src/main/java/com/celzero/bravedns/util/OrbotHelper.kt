@@ -15,6 +15,8 @@
  */
 package com.celzero.bravedns.util
 
+import Logger
+import Logger.LOG_TAG_VPN
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -27,25 +29,26 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.VpnService
 import android.text.TextUtils
-import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.data.AppConfig
 import com.celzero.bravedns.database.ProxyEndpoint
 import com.celzero.bravedns.receiver.NotificationActionReceiver
 import com.celzero.bravedns.service.PersistentState
+import com.celzero.bravedns.service.ProxyManager
 import com.celzero.bravedns.ui.HomeScreenActivity
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_VPN
+import com.celzero.bravedns.util.Constants.Companion.HTTP_PROXY_PORT
+import com.celzero.bravedns.util.Constants.Companion.SOCKS_DEFAULT_PORT
 import com.celzero.bravedns.util.Utilities.getActivityPendingIntent
 import com.celzero.bravedns.util.Utilities.getBroadcastPendingIntent
 import com.celzero.bravedns.util.Utilities.isAtleastO
 import com.celzero.bravedns.util.Utilities.isAtleastT
 import com.celzero.bravedns.util.Utilities.isFdroidFlavour
 import com.celzero.bravedns.util.Utilities.isPlayStoreFlavour
+import com.celzero.bravedns.util.Utilities.isValidPort
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -109,13 +112,16 @@ class OrbotHelper(
         const val NOTIF_CHANNEL_ID_PROXY_ALERTS = "PROXY_ALERTS"
     }
 
-    var socks5Port: Int? = null
-    var httpsPort: Int? = null
-    var socks5Ip: String? = null
-    var httpsIp: String? = null
-    var dnsPort: Int? = null
+    private var socks5Port: Int? = null
+    private var httpsPort: Int? = null
+    private var socks5Ip: String? = null
+    private var httpsIp: String? = null
+    private var dnsPort: Int? = null
 
-    @Volatile private var isResponseReceivedFromOrbot: Boolean = false
+    @Volatile
+    private var isResponseReceivedFromOrbot: Boolean = false
+
+    private var retryCount = 3
 
     /** Returns the intent which will initiate the Orbot in non-vpn mode. */
     private fun getOrbotStartIntent(): Intent {
@@ -184,10 +190,15 @@ class OrbotHelper(
         selectedProxyType = type
         val intent = getOrbotStartIntent()
         isResponseReceivedFromOrbot = false
-        context.registerReceiver(orbotStatusReceiver, IntentFilter(ACTION_STATUS))
+        ContextCompat.registerReceiver(
+            context,
+            orbotStatusReceiver,
+            IntentFilter(ACTION_STATUS),
+            ContextCompat.RECEIVER_EXPORTED
+        )
         context.sendBroadcast(intent)
         waitForOrbot()
-        if (DEBUG) Log.d(LOG_TAG_VPN, "request orbot start by broadcast")
+        Logger.d(LOG_TAG_VPN, "request orbot start by broadcast")
     }
 
     /**
@@ -198,40 +209,38 @@ class OrbotHelper(
     private val orbotStatusReceiver: BroadcastReceiver =
         object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                Log.i(LOG_TAG_VPN, "received status from orbot, action: ${intent.action}")
+                Logger.i(LOG_TAG_VPN, "received status from orbot, action: ${intent.action}")
                 if (ACTION_STATUS != intent.action) {
                     return
                 }
 
                 val status = intent.getStringExtra(EXTRA_STATUS)
-                if (DEBUG)
-                    Log.d(
-                        LOG_TAG_VPN,
-                        "received status from orbot, action: ${intent.action}, status: $status"
-                    )
+                Logger.d(
+                    LOG_TAG_VPN,
+                    "received status from orbot, action: ${intent.action}, status: $status"
+                )
 
                 when (status) {
                     STATUS_ON -> {
+                        Logger.i(LOG_TAG_VPN, "Orbot is ON, update the proxy data")
                         isResponseReceivedFromOrbot = true
-                        if (
-                            socks5Ip == null ||
-                                httpsIp == null ||
-                                socks5Port == null ||
-                                httpsPort == null ||
-                                dnsPort == null
-                        ) {
-                            updateOrbotProxyData(intent)
-                        }
+                        updateOrbotProxyData(intent)
                         setOrbotMode()
                     }
+
                     STATUS_OFF -> {
-                        stopOrbot(isInteractive = false)
-                        context.unregisterReceiver(this)
+                        Logger.i(LOG_TAG_VPN, "Orbot is OFF, retry or stop the Orbot")
+                        io { waitForOrbot() }
+                        unregisterReceiver()
                     }
+
                     STATUS_STARTING -> {
+                        Logger.i(LOG_TAG_VPN, "Orbot is STARTING, update the proxy data")
                         updateOrbotProxyData(intent)
                     }
+
                     STATUS_STOPPING -> {
+                        Logger.i(LOG_TAG_VPN, "Orbot is STOPPING, stop the Proxy")
                         updateOrbotProxyData(intent)
                         stopOrbot(isInteractive = false)
                     }
@@ -257,7 +266,7 @@ class OrbotHelper(
         appConfig.removeAllProxies()
         persistentState.orbotConnectionStatus.postValue(false)
         context.sendBroadcast(getOrbotStopIntent())
-        if (DEBUG) Log.d(LOG_TAG_VPN, "stop orbot, remove from proxy")
+        Logger.i(LOG_TAG_VPN, "stop orbot, remove from proxy")
     }
 
     /**
@@ -330,7 +339,7 @@ class OrbotHelper(
 
     private fun setOrbotMode() {
         io {
-            Log.i(LOG_TAG_VPN, "Initiate orbot start with type: $selectedProxyType")
+            Logger.i(LOG_TAG_VPN, "Initiate orbot start with type: $selectedProxyType")
 
             if (isTypeSocks5() && handleOrbotSocks5Update()) {
                 appConfig.addProxy(AppConfig.ProxyType.SOCKS5, AppConfig.ProxyProvider.ORBOT)
@@ -358,27 +367,49 @@ class OrbotHelper(
     }
 
     private suspend fun handleOrbotSocks5Update(): Boolean {
-        val proxyEndpoint = constructProxy()
+        val pMode = ProxyManager.ProxyMode.ORBOT_SOCKS5
+        val id = appConfig.getOrbotSocks5Endpoint().id
+        val proxyEndpoint = constructProxy(id, pMode, socks5Ip, socks5Port)
         return if (proxyEndpoint != null) {
-            appConfig.insertOrbotProxy(proxyEndpoint)
+            appConfig.updateOrbotProxy(proxyEndpoint)
             true
         } else {
-            Log.w(LOG_TAG_VPN, "Error inserting value in proxy database")
+            Logger.w(LOG_TAG_VPN, "Error inserting value in proxy database")
             false
         }
     }
 
-    private fun handleOrbotHttpUpdate(): Boolean {
-        return if (httpsIp != null && httpsPort != null) {
-            persistentState.httpProxyHostAddress = constructHttpAddress(httpsIp!!, httpsPort!!)
+    private suspend fun handleOrbotHttpUpdate(): Boolean {
+        if (httpsIp.isNullOrEmpty() || httpsPort == null) {
+            Logger.w(LOG_TAG_VPN, "Orbot: httpsIp or httpsPort is null")
+            return false
+        }
+
+        val pMode = ProxyManager.ProxyMode.ORBOT_HTTP
+        // store the http address in proxyIp column of ProxyEndpoint table
+        val httpAddress = constructHttpAddress(httpsIp, httpsPort)
+        if (httpAddress.isNullOrEmpty()) {
+            Logger.w(LOG_TAG_VPN, "Orbot: httpAddress is empty")
+            return false
+        }
+
+        val id = appConfig.getOrbotHttpEndpoint().id
+        val proxyEndpoint = constructProxy(id, pMode, httpAddress, 0)
+        return if (proxyEndpoint != null) {
+            appConfig.updateOrbotHttpProxy(proxyEndpoint)
             true
         } else {
-            Log.w(LOG_TAG_VPN, "could not setup Orbot http proxy with ${httpsIp}:${httpsPort}")
+            Logger.w(LOG_TAG_VPN, "Orbot: http proxy err ${httpsIp}:${httpsPort}")
             false
         }
     }
 
-    private fun constructHttpAddress(ip: String?, port: Int?): String {
+    private fun constructHttpAddress(ip: String?, port: Int?): String? {
+        if (ip.isNullOrEmpty() || port == null || !isValidPort(port)) {
+            Logger.w(LOG_TAG_VPN, "cannot construct http address: $ip:$port")
+            return null
+        }
+
         val proxyUrl = StringBuilder()
         // Orbot only supports http proxy
         proxyUrl.append("http://")
@@ -388,23 +419,25 @@ class OrbotHelper(
         return URI.create(proxyUrl.toString()).toASCIIString()
     }
 
-    private fun constructProxy(): ProxyEndpoint? {
-        if (socks5Ip == null || socks5Port == null) {
-            Log.w(
-                LOG_TAG_VPN,
-                "Cannot construct proxy with values ip: $socks5Ip, port: $socks5Port"
-            )
+    private fun constructProxy(
+        id: Int,
+        proxyMode: ProxyManager.ProxyMode,
+        ip: String?,
+        port: Int?
+    ): ProxyEndpoint? {
+        if (ip.isNullOrEmpty() || port == null || !isValidPort(port)) {
+            Logger.w(LOG_TAG_VPN, "cannot construct proxy: $ip:$port")
             return null
         }
 
         return ProxyEndpoint(
-            id = 0,
+            id,
             orbot,
-            proxyMode = 1,
+            proxyMode.value,
             proxyType = "NONE",
             ORBOT_PACKAGE_NAME,
-            socks5Ip!!,
-            socks5Port!!,
+            ip,
+            port,
             userName = "",
             password = "",
             isSelected = true,
@@ -417,17 +450,16 @@ class OrbotHelper(
 
     /** Get the data from the received intent from the Orbot and assign the values. */
     fun updateOrbotProxyData(data: Intent?) {
-        socks5Port = data?.getIntExtra(EXTRA_SOCKS_PROXY_PORT, 0)
-        httpsPort = data?.getIntExtra(EXTRA_HTTP_PROXY_PORT, 0)
+        socks5Port = data?.getIntExtra(EXTRA_SOCKS_PROXY_PORT, SOCKS_DEFAULT_PORT)
+        httpsPort = data?.getIntExtra(EXTRA_HTTP_PROXY_PORT, HTTP_PROXY_PORT)
         socks5Ip = data?.getStringExtra(EXTRA_SOCKS_PROXY_HOST)
         httpsIp = data?.getStringExtra(EXTRA_HTTP_PROXY_HOST)
         dnsPort = data?.getIntExtra(EXTRA_DNS_PORT, 0)
 
-        if (DEBUG)
-            Log.d(
-                LOG_TAG_VPN,
-                "OrbotHelper - Orbot - socks5:$socks5Ip($socks5Port), http: $httpsIp($httpsPort), dns port: $dnsPort"
-            )
+        Logger.d(
+            LOG_TAG_VPN,
+            "OrbotHelper: new val socks5:$socks5Ip($socks5Port), http: $httpsIp($httpsPort), dns: $dnsPort"
+        )
     }
 
     /**
@@ -436,17 +468,29 @@ class OrbotHelper(
      */
     private suspend fun waitForOrbot() {
         io {
-            delay(TimeUnit.SECONDS.toMillis(25L))
-            Log.i(LOG_TAG_VPN, "after timeout, isOrbotUp? $isResponseReceivedFromOrbot")
+            delay(TimeUnit.SECONDS.toMillis(15L))
+            Logger.i(LOG_TAG_VPN, "after timeout, isOrbotUp? $isResponseReceivedFromOrbot")
 
-            // Execute a task in the background thread after 25 sec.
+            // Execute a task in the background thread after 15 sec.
             // If there is no response for the broadcast from the Orbot,
             // then the executor will execute and will disable the Orbot settings.
             // Some cases where the Orbot won't be responding -eg., force stop of application,
             // user disabled auto-start of the application.
-            if (isResponseReceivedFromOrbot) return@io
+            if (isResponseReceivedFromOrbot) {
+                retryCount = 3 // reset the retry count
+                return@io
+            }
 
-            withContext(Dispatchers.Main) { stopOrbot(isInteractive = false) }
+            retryCount--
+            if (retryCount > 0) {
+                Logger.i(LOG_TAG_VPN, "retrying orbot start")
+                startOrbot(selectedProxyType)
+            } else {
+                uiCtx {
+                    stopOrbot(isInteractive = false)
+                    unregisterReceiver()
+                }
+            }
         }
     }
 
@@ -454,7 +498,7 @@ class OrbotHelper(
         try {
             context.unregisterReceiver(orbotStatusReceiver)
         } catch (e: IllegalArgumentException) {
-            Log.w(LOG_TAG_VPN, "Unregister not needed: ${e.message}")
+            Logger.w(LOG_TAG_VPN, "orbot unregister not needed: ${e.message}")
         }
     }
 
@@ -469,7 +513,7 @@ class OrbotHelper(
                 openOrbotAppInfo()
             }
         } catch (e: ActivityNotFoundException) {
-            Log.w(LOG_TAG_VPN, "Failure calling app info: ${e.message}", e)
+            Logger.w(LOG_TAG_VPN, "Failure calling app info: ${e.message}", e)
         }
     }
 
@@ -486,7 +530,7 @@ class OrbotHelper(
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
-            Log.w(LOG_TAG_VPN, "Failure calling app info: ${e.message}", e)
+            Logger.w(LOG_TAG_VPN, "Failure calling app info: ${e.message}", e)
         }
     }
 

@@ -4,7 +4,7 @@
     <string name="dns_crypt_relay_remove_success">Relay DNSCrypt cancellato.</string>
     <string name="dns_proxy_remove_dialog_title">Eliminare il proxy DNS\?</string>
     <string name="blocklist_update_check_not_required">Le liste dei filtri sono già all\'ultima versione.</string>
-    <string name="refresh_complete">Risincronizzazione dell\'elenco delle app completata.</string>
+    <string name="refresh_complete"><!-- use dc_refresh_toast -->Risincronizzazione dell\'elenco delle app completata.</string>
     <string name="show_logs_disabled_network_message">Il registro delle connessioni è stato disattivato. Per riattivarlo, andare su <i>Impostazioni</i> e attivare <i>Salva connessioni sul registro.</i></string>
     <string name="whats_new_version_update">&lt;b&gt;Partecipazione alla LAN!&lt;/b&gt;&lt;br/&gt;&lt;br/&gt; 1. &lt;i&gt;Nuova funzione&lt;/i&gt;: Escludere gli IP privati (LAN / link-local).&lt;br/&gt; 2. Far funzionare l\'impostazione Bypass DNS &amp; Firewall.&lt;br/&gt; 3. Mostrare Maybe Blocked in DNS Logs per i domini che potrebbero essere bloccati dal Firewall.&lt;br/&gt; 4. Mostrare l\'icona adattiva dove supportata.&lt;br/&gt; 5. Richieste di autenticazione bio-metrica una volta ogni 15 minuti.&lt;br/&gt; 6. Altri 6 miglioramenti dell\'interfaccia utente e delle prestazioni.&lt;br/&gt;&lt;br/&gt; &lt;a href=https://svc.rethinkdns.com/r/translate&gt;Aiutare a tradurre questa applicazione&lt;/a&gt;</string>
     <string name="orbot_explanation">Orbot è un\'applicazione proxy gratuita che consente ad altre applicazioni di utilizzare Internet in modo più <u>sicuro</u>.
@@ -29,7 +29,6 @@
     <string name="slide_2_desc">Rethink è il modo più semplice per monitorare l\'attività di rete, aggirare la censura di Internet e attivare un firewall per le app del tuo dispositivo Android.</string>
     <string name="slide_1_title">"Gratuito e  con sorgente pubblica"</string>
     <string name="slide_1_desc">Rethink è un software con sorgente pubblica sostenuto dal programma Mozilla Builders MVP.</string>
-    <string name="rethink_plus">RethinkDNS Plus</string>
     <string name="rdns_plus">RDNS Plus</string>
     <string name="allow">consenti</string>
     <string name="bypass_universal">aggira regole universali</string>
@@ -100,7 +99,7 @@
     <string name="configure_dns_connected_dns_proxy_status">DNS Proxy</string>
     <string name="configure_dns_connection_name">Connesso a %1$s</string>
     <string name="configure_dns_crypt">DNSCrypt: %1$s resolver</string>
-    <string name="http_proxy_dialog_heading">Imposta Proxy HTTP(S)</string>
+    <string name="http_proxy_dialog_heading">Imposta Proxy HTTP(S) CONNECT</string>
     <string name="download_update_dialog_title">Nuovo aggiornamento!</string>
     <string name="download_update_dialog_message">Una nuova versione dell\'app può essere scaricata dal sito web. Vuoi procedere\?</string>
     <string name="download_update_dialog_message_ok_title">Aggiornato!</string>
@@ -128,7 +127,6 @@
     <string name="settings_enable_logs_desc">Conserva il registro delle connessioni DNS e del Firewall sul dispositivo.</string>
     <string name="settings_enable_logs">Salva connessioni sul registro</string>
     <string name="app_mode_choose">Scegli modalità</string>
-    <string name="whats_dialog_title">Novità della versione v055a</string>
     <string name="connection_http3">HTTP/3</string>
     <string name="settings_ip_network_heading">Scegli la versione IP</string>
     <string name="settings_ip_network_desc">Scegli tra le versioni dell\'Internet Protocol.</string>
@@ -140,19 +138,19 @@
     <string name="settings_proxy_header">proxy</string>
     <string name="settings_socks5_heading">Imposta Proxy SOCKS5</string>
     <string name="settings_socks5_desc">Inoltra le connessioni a un endpoint SOCKS5.</string>
-    <string name="settings_https_heading">Imposta Proxy HTTP(S)</string>
+    <string name="settings_https_heading">Imposta Proxy HTTP(S) CONNECT</string>
     <string name="orbot">Orbot</string>
-    <string name="settings_https_desc">Questa impostazione è solo un suggerimento ed è possibile che le applicazioni la ignorino. Le app che utilizzano il proxy HTTP(S) aggirano sia il firewall che le regole DNS.</string>
+    <string name="settings_https_desc">Inoltra connessioni all\'endpoint HTTP(S) CONNECT.</string>
     <string name="orbot_socks5">Proxy solo-TCP</string>
     <string name="orbot_socks5_desc">Inoltra tutte le connessioni TCP a Orbot.</string>
     <string name="orbot_http">Proxy HTTP</string>
-    <string name="orbot_http_desc">Stabilizza un tunnel HTTP CONNECT a Orbot.</string>
+    <string name="orbot_http_desc">Crea un tunnel HTTP CONNECT con Orbot.</string>
     <string name="orbot_both">TCP + Proxy HTTP</string>
     <string name="orbot_both_desc">Tutti i precedenti.</string>
     <string name="orbot_none">Nessuno (predefinito)</string>
     <string name="orbot_none_desc">Nessuna delle precedenti.</string>
     <string name="orbot_bs_status_1">Inoltro le connessioni %1$s a Orbot.</string>
-    <string name="orbot_bs_status_2">"Proxy HTTP  impostata."</string>
+    <string name="orbot_bs_status_2">Proxy HTTP impostato.</string>
     <string name="orbot_status_arg_2">TCP</string>
     <string name="orbot_status_arg_3">DNS e TCP</string>
     <string name="orbot_app_issue">Impossibile avviare Orbot. È installato\?</string>
@@ -252,7 +250,7 @@
     <string name="firewall_status_allow">consentito</string>
     <string name="firewall_status_whitelisted">Aggira le regole universali del firewall</string>
     <string name="firewall_status_blocked">bloccata</string>
-    <string name="lbl_proceed">Procedi</string>
+    <string name="lbl_proceed">Prosegui</string>
     <string name="hsf_vpn_dialog_message">Rethink ha bisogno del permesso di impostare una VPN locale per crittografare le richieste DNS del dispositivo, monitorare le connessioni di rete e applicare le regole del firewall.
 \n
 \nRethink non raccoglie informazioni né spia l\'utente in alcun modo.</string>
@@ -391,7 +389,6 @@
     <string name="hsf_blocklist_updating_text">Avvio…</string>
     <string name="hsf_chip_appearance">Tema: %1$s</string>
     <string name="hsf_pause_vpn_failure">Impossibile mettere in pausa: Rethink non è attivo</string>
-    <string name="hsf_pause_lockdown_failure">Impossibile mettere in pausa: Rethink è impostata come VPN obbligatoria</string>
     <string name="dc_block_heading">regole</string>
     <string name="dc_other_dns_heading">tipo</string>
     <string name="dc_custom_dns_radio">Altro DNS</string>
@@ -542,7 +539,6 @@
     <string name="fapps_metered_block_dialog_title">Blocca su rete a consumo</string>
     <string name="fapps_metered_block_dialog_message">Bloccare le connessioni sulla rete a consumo (dati mobili) delle le applicazioni <i>elencate</i>\?</string>
     <string name="fapps_firewall_filter_hint">Mostra tutte le app</string>
-    <string name="fapps_lockdown_hint">La VPN è in modalità obbligatoria. Il Firewall non rispetterà le regole A Consumo / Non a Consumo.</string>
     <string name="fapps_firewall_filter_desc"><u>%1$s</u>%2$s app elencate</string>
     <string name="fapps_firewall_filter_desc_category"><u>%1$s</u> %2$s app elencate delle categorie: %3$s</string>
     <string name="rules_load_failure_heading">Nota</string>
@@ -816,7 +812,6 @@
     <string name="lbl_rules" translatable="true">regole</string>
     <string name="lbl_network" translatable="true">rete</string>
     <string name="bypass_dns_firewall" translatable="true">bypassare dns e firewall</string>
-    <string name="trusted_domains_desc" translatable="true">La regola del dominio di fiducia funziona meglio con il DNS <u>Rethink</u>.</string>
     <string name="settings_allow_lan_heading" translatable="true">Non instradare IP privati (sperimentale)</string>
     <string name="settings_lock_down_proxy_desc" translatable="true">Non è possibile impostare le proxy quando la VPN funziona in modalità solo DNS.</string>
     <string name="settings_pcap_heading" translatable="true">Acquisizione pacchetti</string>
@@ -885,7 +880,7 @@
     <string name="lbl_addresses" translatable="true">Indirizzi</string>
     <string name="lbl_active" translatable="true">Attivo</string>
     <string name="lbl_dns_servers" translatable="true">Server DNS</string>
-    <string name="settings_app_notification_persistent_desc" translatable="true">Rendi la notifica persistente</string>
+    <string name="settings_app_notification_persistent_desc" translatable="true">Rendi la notifica permanente</string>
     <string name="lbl_app_wise" translatable="true">per applicazione</string>
     <string name="status_protected_with_wg" translatable="true">protetto con wireguard</string>
     <string name="lbl_public_key" translatable="true">Chiave Pubblica</string>
@@ -898,9 +893,33 @@
     <string name="logs_card_duration" translatable="true">da %1$s</string>
     <string name="lbl_select_all" translatable="true">Seleziona tutto</string>
     <string name="lbl_create" translatable="true">Crea</string>
-    <string name="http_proxy_dialog_desc" translatable="true">Impostare l\'URL del form, &lt;protocollo&gt;: //&lt;username&gt;: &lt;password&gt;@&lt;dominio-o-ip&gt;&lt;destinazione&gt; Esempio: http://proxy.esempio.com:8080/</string>
+    <string name="http_proxy_dialog_desc" translatable="true">Impostare l\'URL nella forma &lt;protocollo&gt;: //&lt;username&gt;: &lt;password&gt;@&lt;dominio-o-ip&gt;&lt;destinazione&gt; Esempio: http://proxy.esempio.com:8080/</string>
     <string name="status_protected_with_wg_private_dns" translatable="true">protetto con wireguard &amp; dns privato</string>
-    <string name="settings_app_notification_persistent_heading" translatable="true">Notifica persistente</string>
+    <string name="settings_app_notification_persistent_heading" translatable="true">Notifica permamente</string>
     <string name="lbl_listen_port" translatable="true">Porta di ascolto</string>
     <string name="lbl_random" translatable="true">(randomico)</string>
+    <string name="lbl_status" translatable="true">Stato</string>
+    <string name="lbl_remove" translatable="true">Rimuovi</string>
+    <string name="lbl_last" translatable="true">Ultimo</string>
+    <string name="lbl_stopped" translatable="true">Fermato</string>
+    <string name="lbl_very" translatable="true">molto</string>
+    <string name="lbl_cache" translatable="true">Cache</string>
+    <string name="lbl_starting" translatable="true">Avviando</string>
+    <string name="lbl_overall" translatable="true">Complessivamente</string>
+    <string name="lbl_private" translatable="true">privato</string>
+    <string name="lbl_split" translatable="true">Split</string>
+    <string name="lbl_on_device" translatable="true">sul device</string>
+    <string name="dot_custom_url_remove_dialog_message" translatable="true">Elimina la configurazione dell\'endpoint DLS su TLS.</string>
+    <string name="failed_using_default" translatable="true">Fallimento: uso il DNS di fallback</string>
+    <string name="lbl_secure" translatable="true">sicuro</string>
+    <string name="lbl_idle" translatable="true">Inattivo</string>
+    <string name="lbl_anonymous" translatable="true">anonimo</string>
+    <string name="dot_custom_url_remove_dialog_title" translatable="true">Eliminare l\'endpoint DoT?</string>
+    <string name="hybrid_mode_with_proxy_notification_title" translatable="true">Protetto! Collegato a DNS + Firewall + Proxy.</string>
+    <string name="lbl_peer" translatable="true">Peer</string>
+    <string name="settings_connectivity_checks" translatable="true">Esegui controlli di connettività</string>
+    <string name="orbot_no_app_toast" translatable="true">Aggiungi almeno un\'app per abilitare Orbot</string>
+    <string name="settings_rinr_heading" translatable="true">Loopback (sperimentale)</string>
+    <string name="settings_connectivity_checks_desc" translatable="true">I controlli di connettività vengono inviati per accertare la raggiungibilità.</string>
+    <string name="lbl_unselected" translatable="true">Non selezionato</string>
 </resources>

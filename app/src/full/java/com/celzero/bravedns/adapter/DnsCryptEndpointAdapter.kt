@@ -24,32 +24,35 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.paging.PagingDataAdapter
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+import backend.Backend
 import com.celzero.bravedns.R
 import com.celzero.bravedns.data.AppConfig
 import com.celzero.bravedns.database.DnsCryptEndpoint
 import com.celzero.bravedns.databinding.DnsCryptEndpointListItemBinding
+import com.celzero.bravedns.service.VpnController
 import com.celzero.bravedns.util.UIUtils
 import com.celzero.bravedns.util.UIUtils.clipboardCopy
 import com.celzero.bravedns.util.Utilities
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class DnsCryptEndpointAdapter(
-    private val context: Context,
-    val lifecycleOwner: LifecycleOwner,
-    private val appConfig: AppConfig
-) :
+class DnsCryptEndpointAdapter(private val context: Context, private val appConfig: AppConfig) :
     PagingDataAdapter<DnsCryptEndpoint, DnsCryptEndpointAdapter.DnsCryptEndpointViewHolder>(
         DIFF_CALLBACK
     ) {
+    var lifecycleOwner: LifecycleOwner? = null
 
     companion object {
+        private const val ONE_SEC = 1000L
         private val DIFF_CALLBACK =
             object : DiffUtil.ItemCallback<DnsCryptEndpoint>() {
 
@@ -78,6 +81,7 @@ class DnsCryptEndpointAdapter(
                 parent,
                 false
             )
+        lifecycleOwner = parent.findViewTreeLifecycleOwner()
         return DnsCryptEndpointViewHolder(itemBinding)
     }
 
@@ -88,6 +92,7 @@ class DnsCryptEndpointAdapter(
 
     inner class DnsCryptEndpointViewHolder(private val b: DnsCryptEndpointListItemBinding) :
         RecyclerView.ViewHolder(b.root) {
+        private var statusCheckJob: Job? = null
 
         fun update(endpoint: DnsCryptEndpoint) {
             displayDetails(endpoint)
@@ -112,12 +117,14 @@ class DnsCryptEndpointAdapter(
             b.dnsCryptEndpointListUrlName.text = endpoint.dnsCryptName
             b.dnsCryptEndpointListActionImage.isChecked = endpoint.isSelected
 
-            b.dnsCryptEndpointListUrlExplanation.text =
-                if (endpoint.isSelected) {
-                    context.getString(UIUtils.getDnsStatus()).replaceFirstChar(Char::titlecase)
-                } else {
-                    ""
-                }
+            if (endpoint.isSelected && VpnController.hasTunnel()) {
+                keepSelectedStatusUpdated()
+            } else if (endpoint.isSelected) {
+                b.dnsCryptEndpointListUrlExplanation.text =
+                    context.getString(R.string.rt_filter_parent_selected)
+            } else {
+                b.dnsCryptEndpointListUrlExplanation.text = ""
+            }
 
             if (endpoint.isDeletable()) {
                 b.dnsCryptEndpointListInfoImage.setImageDrawable(
@@ -128,6 +135,35 @@ class DnsCryptEndpointAdapter(
                     ContextCompat.getDrawable(context, R.drawable.ic_info)
                 )
             }
+        }
+
+        private fun keepSelectedStatusUpdated() {
+            statusCheckJob = ui {
+                while (true) {
+                    updateSelectedStatus()
+                    delay(ONE_SEC)
+                }
+            }
+        }
+
+        private fun updateSelectedStatus() {
+            // if the view is not active then cancel the job
+            if (
+                lifecycleOwner
+                    ?.lifecycle
+                    ?.currentState
+                    ?.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) == false ||
+                    bindingAdapterPosition == RecyclerView.NO_POSITION
+            ) {
+                statusCheckJob?.cancel()
+                return
+            }
+
+            // always use the id as Dnsx.Preffered as it is the primary dns id for now
+            val state = VpnController.getDnsStatus(Backend.Preferred)
+            val status = UIUtils.getDnsStatusStringRes(state)
+            b.dnsCryptEndpointListUrlExplanation.text =
+                context.getString(status).replaceFirstChar(Char::titlecase)
         }
 
         private fun showExplanationOnImageClick(dnsCryptEndpoint: DnsCryptEndpoint) {
@@ -187,6 +223,7 @@ class DnsCryptEndpointAdapter(
             if (message.isNullOrEmpty()) return ""
 
             return try {
+                // fixme: find a better way to handle this
                 if (message.contains("R.string.")) {
                     val m = message.substringAfter("R.string.")
                     val resId: Int =
@@ -211,12 +248,11 @@ class DnsCryptEndpointAdapter(
             io {
                 appConfig.deleteDnscryptEndpoint(id)
                 uiCtx {
-                    Toast.makeText(
-                            context,
-                            R.string.dns_crypt_url_remove_success,
-                            Toast.LENGTH_SHORT
-                        )
-                        .show()
+                    Utilities.showToastUiCentered(
+                        context,
+                        context.getString(R.string.dns_crypt_url_remove_success),
+                        Toast.LENGTH_SHORT
+                    )
                 }
             }
         }
@@ -225,8 +261,12 @@ class DnsCryptEndpointAdapter(
             withContext(Dispatchers.Main) { f() }
         }
 
+        private fun ui(f: suspend () -> Unit): Job? {
+            return lifecycleOwner?.lifecycleScope?.launch(Dispatchers.Main) { f() }
+        }
+
         private fun io(f: suspend () -> Unit) {
-            lifecycleOwner.lifecycleScope.launch { withContext(Dispatchers.IO) { f() } }
+            lifecycleOwner?.lifecycleScope?.launch(Dispatchers.IO) { f() }
         }
     }
 }

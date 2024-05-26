@@ -15,6 +15,9 @@
  */
 package com.celzero.bravedns.database
 
+import Logger
+import Logger.LOG_TAG_APP_DB
+import Logger.LOG_TAG_VPN
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -26,13 +29,10 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
-import androidx.annotation.GuardedBy
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.receiver.NotificationActionReceiver
 import com.celzero.bravedns.service.DomainRulesManager
 import com.celzero.bravedns.service.FirewallManager
@@ -41,29 +41,31 @@ import com.celzero.bravedns.service.FirewallManager.deletePackage
 import com.celzero.bravedns.service.IpRulesManager
 import com.celzero.bravedns.service.PersistentState
 import com.celzero.bravedns.service.ProxyManager
+import com.celzero.bravedns.service.TcpProxyHelper
 import com.celzero.bravedns.service.VpnController
+import com.celzero.bravedns.service.WireguardManager
+import com.celzero.bravedns.ui.HomeScreenActivity
 import com.celzero.bravedns.ui.NotificationHandlerDialog
-import com.celzero.bravedns.util.*
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_APP_DB
+import com.celzero.bravedns.util.AndroidUidConfig
+import com.celzero.bravedns.util.Constants
+import com.celzero.bravedns.util.PlayStoreCategory
+import com.celzero.bravedns.util.UIUtils
+import com.celzero.bravedns.util.Utilities
 import com.celzero.bravedns.util.Utilities.getActivityPendingIntent
 import com.celzero.bravedns.util.Utilities.isAtleastO
 import com.celzero.bravedns.util.Utilities.isAtleastT
 import com.celzero.bravedns.util.Utilities.isNonApp
-import com.google.common.collect.Sets
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import java.util.*
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantReadWriteLock
-import kotlin.concurrent.read
-import kotlin.concurrent.write
 import kotlin.random.Random
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 
 class RefreshDatabase
 internal constructor(
-    private var context: Context,
+    private var ctx: Context,
     private val connTrackerRepository: ConnectionTrackerRepository,
     private val dnsLogRepository: DnsLogRepository,
     private val persistentState: PersistentState
@@ -71,279 +73,392 @@ internal constructor(
 
     companion object {
         private const val NOTIF_BATCH_NEW_APPS_THRESHOLD = 5
-
+        private val FULL_REFRESH_INTERVAL = TimeUnit.MINUTES.toMillis(1L)
+        private const val NOTIF_ID_LOAD_RULES_FAIL = 103
+        private const val NOBODY = Constants.INVALID_UID
+        private const val ACTION_BASE = 0
+        const val ACTION_REFRESH_RESTORE = ACTION_BASE + 1
+        const val ACTION_REFRESH_AUTO = ACTION_BASE + 2
+        const val ACTION_REFRESH_INTERACTIVE = ACTION_BASE + 3
+        const val ACTION_REFRESH_FORCE = ACTION_BASE + 4
+        const val ACTION_INSERT_NEW_APP = ACTION_BASE + 5
         const val PENDING_INTENT_REQUEST_CODE_ALLOW = 0x10000000
         const val PENDING_INTENT_REQUEST_CODE_DENY = 0x20000000
     }
 
-    private val refreshMutex = ReentrantReadWriteLock()
     private val randomNotifId: Random = Random
+    private val actions: Channel<Action> = Channel(Channel.RENDEZVOUS)
 
-    @GuardedBy("refreshMutex") @Volatile private var isRefreshInProgress: Boolean = false
+    data class Action(val action: Int, val uid: Int = NOBODY, val cb: suspend () -> Unit = {})
+
+    private var latestRefreshTime: Long = 0L
+
+    init {
+        io("RefreshDatabase") {
+            for (action in actions) {
+                process(action)
+            }
+        }
+    }
 
     /**
      * Need to rewrite the logic for adding the apps in the database and removing it during
      * uninstall.
      */
-    suspend fun refreshAppInfoDatabase() {
-        if (DEBUG) Log.d(LOG_TAG_APP_DB, "Initiated refresh application info")
+    suspend fun refresh(action: Int, cb: suspend () -> Unit = {}) {
+        actions.send(Action(action, NOBODY, cb))
+    }
 
-        refreshMutex.read {
-            if (isRefreshInProgress) {
+    suspend fun addNewApp(uid: Int) {
+        actions.send(Action(ACTION_INSERT_NEW_APP, uid))
+    }
+
+    suspend fun process(a: Action) {
+        try {
+            val action = a.action
+            val uid = a.uid // may be -1
+            Logger.d(LOG_TAG_APP_DB, "Initiated refresh application info $a")
+            if (action == ACTION_INSERT_NEW_APP) {
+                // ignore invalid uid (app source could not be determined)
+                // ignore missing uid (protocol unknown or connectivity mgr missing)
+                if (Utilities.isMissingOrInvalidUid(uid)) return
+                maybeInsertApp(uid)
                 return
             }
-        }
-
-        refreshMutex.write {
-            if (isRefreshInProgress) {
+            val current = SystemClock.elapsedRealtime()
+            // do not auto-refresh and the last refresh was within AUTO_REFRESH_INTERVAL
+            if (
+                latestRefreshTime > 0 &&
+                    current - latestRefreshTime < FULL_REFRESH_INTERVAL &&
+                    (action == ACTION_REFRESH_AUTO || action == ACTION_REFRESH_INTERACTIVE)
+            ) {
+                Logger.i(LOG_TAG_APP_DB, "no-op auto refresh")
                 return
             }
+            latestRefreshTime = current
+            val pm = ctx.packageManager ?: return
 
-            isRefreshInProgress = true
-        }
+            val fm = FirewallManager.load()
+            val ipm = IpRulesManager.load()
+            val dm = DomainRulesManager.load()
+            val pxm = ProxyManager.load()
+            val wgm = WireguardManager.load()
+            val tcpm = TcpProxyHelper.load()
 
-        ioCtx {
-            try {
-                FirewallManager.reloadAppList()
+            Logger.i(
+                LOG_TAG_APP_DB,
+                "reload: fm: ${fm}; ip: ${ipm}; dom: ${dm}; px: ${pxm}; wg: ${wgm}; t: ${tcpm}"
+            )
 
-                // Get app details from Global variable
-                val trackedApps = FirewallManager.getPackageNames()
+            val trackedApps = FirewallManager.getAllApps()
+            // installedPackages includes apps which are disabled by the user
+            val installedPackages: List<PackageInfo> =
+                if (isAtleastT()) {
+                    pm.getInstalledPackages(
+                        PackageManager.PackageInfoFlags.of(PackageManager.GET_META_DATA.toLong())
+                    )
+                } else {
+                    pm.getInstalledPackages(PackageManager.GET_META_DATA)
+                }
 
-                // installedPackages will also include apps which are disabled by the user
-                val installedPackages: List<PackageInfo> =
-                    if (isAtleastT()) {
-                        context.packageManager?.getInstalledPackages(
-                            PackageManager.PackageInfoFlags.of(
-                                PackageManager.GET_META_DATA.toLong()
-                            )
-                        ) as List<PackageInfo>
-                    } else {
-                        context.packageManager?.getInstalledPackages(PackageManager.GET_META_DATA)
-                            as List<PackageInfo>
-                    }
+            val installedApps =
+                installedPackages
+                    .map { FirewallManager.AppInfoTuple(it.applicationInfo.uid, it.packageName) }
+                    .toSet()
 
-                val installedApps =
-                    installedPackages
-                        .map {
-                            FirewallManager.AppInfoTuple(it.applicationInfo.uid, it.packageName)
-                        }
-                        .toHashSet()
+            val packagesToAdd =
+                findPackagesToAdd(trackedApps, installedApps, action == ACTION_REFRESH_RESTORE)
+            val packagesToDelete =
+                findPackagesToDelete(trackedApps, installedApps, action == ACTION_REFRESH_RESTORE)
+            val packagesToUpdate =
+                findPackagesToUpdate(trackedApps, installedApps, action == ACTION_REFRESH_RESTORE)
 
-                // packages which are all available in database but not in installed apps(package
-                // manager)
-                val packagesToDelete =
-                    Sets.difference(trackedApps, installedApps)
-                        .filter { !isNonApp(it.packageName) }
-                        .toHashSet()
+            printAll(packagesToAdd, "packagesToAdd")
+            printAll(packagesToDelete, "packagesToDelete")
+            printAll(packagesToUpdate, "packagesToUpdate")
 
-                // packages which are all available in installed apps list but not in database
-                val packagesToAdd =
-                    Sets.difference(installedApps, trackedApps)
-                        .filter {
-                            // Remove this package
-                            it.packageName != context.packageName
-                        }
-                        .toHashSet()
-
-                handleDeletedPackages(packagesToDelete)
-
-                Log.i(LOG_TAG_APP_DB, "remove: $packagesToDelete; insert: $packagesToAdd")
-
-                addMissingPackages(packagesToAdd)
-
-                refreshNonApps(trackedApps, installedApps)
-            } catch (e: RuntimeException) {
-                Log.e(LOG_TAG_APP_DB, e.message, e)
-                throw e
-            } finally {
-                withContext(NonCancellable) { refreshMutex.write { isRefreshInProgress = false } }
-            }
+            Logger.i(
+                LOG_TAG_APP_DB,
+                "sizes: rmv: ${packagesToDelete.size}; add: ${packagesToAdd.size}; update: ${packagesToUpdate.size}"
+            )
+            deletePackages(packagesToDelete)
+            addMissingPackages(packagesToAdd)
+            updateExistingPackagesIfNeeded(packagesToUpdate) // updated only for restore
+            removeWireGuardProfilesIfNeeded(action == ACTION_REFRESH_RESTORE)
+            refreshNonApps(trackedApps, installedApps)
+            // for proxy mapping, restore is a special case, where we clear all proxy->app mappings
+            // and so, packagesToUpdate, even if not empty, is ignored. proxy mappings cannot be
+            // updated during restore.
+            refreshProxyMapping(trackedApps, action == ACTION_REFRESH_RESTORE)
+            // must be called after updateExistingPackagesIfNeeded
+            refreshIPRules(packagesToUpdate)
+            // must be called after updateExistingPackagesIfNeeded
+            refreshDomainRules(packagesToUpdate)
+        } catch (e: RuntimeException) {
+            Logger.e(LOG_TAG_APP_DB, e.message ?: "refresh err", e)
+            throw e
+        } finally {
+            notifyEmptyFirewallRulesIfNeeded()
+            a.cb()
         }
     }
 
-    private suspend fun handleDeletedPackages(packagesToDelete: Set<FirewallManager.AppInfoTuple>) {
+    private fun findPackagesToAdd(
+        old: Set<FirewallManager.AppInfoTuple>,
+        latest: Set<FirewallManager.AppInfoTuple>,
+        ignoreUid: Boolean = false
+    ): Set<FirewallManager.AppInfoTuple> {
+        return if (ignoreUid) {
+            val oldpkgs = old.map { it.packageName }.toSet()
+            latest
+                .filter { !oldpkgs.contains(it.packageName) }
+                .toHashSet() // latest apps not found in old
+        } else {
+            latest.filter { !old.contains(it) }.toHashSet()
+        }
+    }
+
+    private fun findPackagesToDelete(
+        old: Set<FirewallManager.AppInfoTuple>,
+        latest: Set<FirewallManager.AppInfoTuple>,
+        ignoreUid: Boolean = false
+    ): Set<FirewallManager.AppInfoTuple> {
+        return if (ignoreUid) {
+            val latestpkgs = latest.map { it.packageName }.toSet()
+            old.filter { !latestpkgs.contains(it.packageName) && !isNonApp(it.packageName) }
+                .toHashSet()
+        } else {
+            // extract old apps that are not latest
+            old.filter { !latest.contains(it) && !isNonApp(it.packageName) }.toHashSet()
+        }
+    }
+
+    private fun findPackagesToUpdate(
+        old: Set<FirewallManager.AppInfoTuple>,
+        latest: Set<FirewallManager.AppInfoTuple>,
+        ignoreUid: Boolean = false
+    ): Set<FirewallManager.AppInfoTuple> {
+        return if (ignoreUid) {
+            val latestpkgs = latest.map { it.packageName }.toSet()
+            old.filter { latestpkgs.contains(it.packageName) }
+                .toSet() // find old package names that appear in latest
+        } else {
+            // Sets.intersection(old, latest); need not update apps already tracked
+            emptySet()
+        }
+    }
+
+    private suspend fun deletePackages(packagesToDelete: Set<FirewallManager.AppInfoTuple>) {
         // remove all the rules related to the packages
         packagesToDelete.forEach {
             IpRulesManager.deleteRulesByUid(it.uid)
             DomainRulesManager.deleteRulesByUid(it.uid)
-            val appInfo = FirewallManager.getAppInfoByUid(it.uid) ?: return@forEach
-            ProxyManager.deleteApp(appInfo)
+            ProxyManager.deleteAppMappingsByUid(it.uid)
         }
         FirewallManager.deletePackages(packagesToDelete)
     }
 
     private suspend fun refreshNonApps(
         trackedApps: Set<FirewallManager.AppInfoTuple>,
-        installedApps: MutableSet<FirewallManager.AppInfoTuple>
+        installedApps: Set<FirewallManager.AppInfoTuple>
     ) {
         // if a non-app appears installed-apps group, then upsert its db entry
         // and give it a proper identity as retrieved from the package-manager
         val nonApps = trackedApps.filter { isNonApp(it.packageName) }.map { it.uid }.toSet()
-        installedApps.forEach { it ->
-            if (nonApps.contains(it.uid)) {
+        installedApps.forEach { x ->
+            if (nonApps.contains(x.uid)) {
                 val prevPackageName =
-                    trackedApps.filter { i -> i.uid == it.uid }.map { it.packageName }
-                upsertApp(it, prevPackageName.first())
+                    trackedApps.filter { i -> i.uid == x.uid }.map { it.packageName }
+                upsertNonApp(x, prevPackageName.firstOrNull())
             }
         }
     }
 
-    private suspend fun upsertApp(appTuple: FirewallManager.AppInfoTuple, prevPackageName: String) {
-        // do not upsert android and system apps
-        if (
-            appTuple.uid == AndroidUidConfig.ANDROID.uid ||
-                appTuple.uid == AndroidUidConfig.SYSTEM.uid
-        ) {
-            return
-        }
-
-        val appInfo = getAppInfo(appTuple.uid) ?: return
-
-        deletePackage(prevPackageName)
+    private suspend fun upsertNonApp(
+        appTuple: FirewallManager.AppInfoTuple,
+        prevPackageName: String?
+    ) {
+        val appInfo = fetchApplicationInfo(appTuple.uid) ?: return
+        // TODO: implement upsert logic handling all the edge cases
+        deletePackage(appTuple.uid, prevPackageName)
         insertApp(appInfo)
     }
 
     // TODO: Ideally this should be in FirewallManager
-    private suspend fun addMissingPackages(apps: HashSet<FirewallManager.AppInfoTuple>) {
+    private suspend fun addMissingPackages(apps: Set<FirewallManager.AppInfoTuple>) {
         if (apps.isEmpty()) return
 
-        handleNewAppNotification(apps)
-
-        // add apps missing from app-info-repository
         apps.forEach {
-            if (it.packageName == context.applicationContext.packageName) return@forEach
+            // no need to avoid adding Rethink app to the database, so commenting the below line
+            // if (it.packageName == context.applicationContext.packageName) return@forEach
+            val ai = Utilities.getApplicationInfo(ctx, it.packageName) ?: return@forEach
+            insertApp(ai)
+        }
+        maybeSendNewAppNotification(apps)
+    }
 
-            val appInfo = Utilities.getApplicationInfo(context, it.packageName) ?: return@forEach
+    private suspend fun updateExistingPackagesIfNeeded(apps: Set<FirewallManager.AppInfoTuple>) {
+        if (apps.isEmpty()) return
 
-            insertApp(appInfo)
+        apps.forEach { old ->
+            // get the latest app info from package manager against existing package name
+            val newinfo = Utilities.getApplicationInfo(ctx, old.packageName) ?: return@forEach
+            updateApp(old.uid, newinfo.uid, old.packageName)
         }
     }
 
-    suspend fun handleNewlyConnectedApp(uid: Int) {
-        // ignore invalid uid (app source could not be determined)
-        // ignore missing uid (protocol unknown or connectivity mgr missing)
-        if (Utilities.isMissingOrInvalidUid(uid)) return
-
-        var remainingTimeMs = TimeUnit.SECONDS.toMillis(30L)
-
-        // do not proceed unless a refresh is not in progress
-        // but this block of code doesn't need to acquire isRefreshInProgress mutex
-        // as this is just a one-off insert (FirewallManager app-cache has its own mutex
-        // while db inserts are serialized).
-        val waitSliceMs = TimeUnit.SECONDS.toMillis(3L)
-        while (remainingTimeMs > 0) {
-            val startMs = SystemClock.elapsedRealtime()
-            refreshMutex.read {
-                if (!isRefreshInProgress) {
-                    remainingTimeMs = 0 // break out
-                }
-            }
-            val endMs = SystemClock.elapsedRealtime()
-            remainingTimeMs = remainingTimeMs - waitSliceMs - (endMs - startMs)
-            if (remainingTimeMs > 0) delay(waitSliceMs)
+    private suspend fun refreshIPRules(apps: Set<FirewallManager.AppInfoTuple>) {
+        if (apps.isEmpty()) return
+        val oldUids = mutableListOf<Int>()
+        val newUids = mutableListOf<Int>()
+        apps.forEach { old ->
+            // FirewallManager must have been udpated by now, so we can get the latest app info
+            // using the package-name (as uid have changed)
+            val newinfo = FirewallManager.getAppInfoByPackage(old.packageName) ?: return@forEach
+            oldUids.add(old.uid)
+            newUids.add(newinfo.uid)
         }
+        IpRulesManager.updateUids(oldUids, newUids)
+    }
 
-        refreshMutex.read {
-            if (isRefreshInProgress) {
-                Log.i(LOG_TAG_APP_DB, "wait timeout on insert new app")
-                return
-            }
+    private suspend fun refreshDomainRules(apps: Set<FirewallManager.AppInfoTuple>) {
+        if (apps.isEmpty()) return
+        val oldUids = mutableListOf<Int>()
+        val newUids = mutableListOf<Int>()
+        apps.forEach { old ->
+            // FirewallManager must have been udpated by now, so we can get the latest app info
+            // using the package-name (as uid have changed)
+            val newinfo = FirewallManager.getAppInfoByPackage(old.packageName) ?: return@forEach
+            oldUids.add(old.uid)
+            newUids.add(newinfo.uid)
         }
-        maybeInsertApp(uid)
+        DomainRulesManager.updateUids(oldUids, newUids)
     }
 
     private suspend fun maybeInsertApp(uid: Int) {
-        if (FirewallManager.hasUid(uid)) {
-            Log.i(LOG_TAG_APP_DB, "uid: $uid already tracked by firewall manager")
+        val knownUid = FirewallManager.hasUid(uid)
+        if (knownUid) {
+            Logger.i(LOG_TAG_APP_DB, "insertApp: $uid already tracked")
             return
         }
-
-        val ai = handleAppInAppRange(uid)
-        Log.i(LOG_TAG_APP_DB, "inserting app with uid: $uid, app-info: ${ai?.packageName}")
+        val ai = maybeFetchAppInfo(uid)
+        val pkg = ai?.packageName ?: ""
+        Logger.i(LOG_TAG_APP_DB, "insert app; uid: $uid, pkg: ${pkg}")
         if (ai != null) {
+            // uid may be different from the one in ai, if the app is installed in a different user
             insertApp(ai)
         } else {
             insertUnknownApp(uid)
         }
-
-        showNewAppNotificationIfNeeded(FirewallManager.AppInfoTuple(uid, ai?.packageName ?: ""))
+        showNewAppNotificationIfNeeded(FirewallManager.AppInfoTuple(uid, pkg))
     }
 
-    private suspend fun handleAppInAppRange(uid: Int): ApplicationInfo? {
+    private fun maybeFetchAppInfo(uid: Int): ApplicationInfo? {
         if (!AndroidUidConfig.isUidAppRange(uid)) return null
 
-        return getAppInfo(uid)
+        return fetchApplicationInfo(uid)
     }
 
-    private suspend fun getAppInfo(uid: Int): ApplicationInfo? {
-        var appInfo: ApplicationInfo? = null
-        // get packages for uid
-        val packageNameList = Utilities.getPackageInfoForUid(context, uid)
-        if (packageNameList.isNullOrEmpty()) return null
+    private fun fetchApplicationInfo(uid: Int): ApplicationInfo? {
+        val pkgs = Utilities.getPackageInfoForUid(ctx, uid)
+        // return the first appinfo for a given uid (there could be multiple)
+        pkgs?.forEach {
+            return Utilities.getApplicationInfo(ctx, it) ?: return@forEach
+        }
+        return null
+    }
 
-        packageNameList.forEach {
-            val info = Utilities.getApplicationInfo(context, it) ?: return@forEach
+    private suspend fun removeWireGuardProfilesIfNeeded(rmv: Boolean) {
+        // may already have been purged by RestoreAgent.startRestore() -> wireguardCleanup()
+        if (rmv) {
+            WireguardManager.restoreProcessDeleteWireGuardEntries()
+        } else {
+            Logger.d(LOG_TAG_APP_DB, "removeWireGuardProfilesIfNeeded: no-op")
+        }
+    }
 
-            appInfo = info
-            return appInfo
+    private suspend fun refreshProxyMapping(
+        trackedApps: Set<FirewallManager.AppInfoTuple>,
+        emptyAll: Boolean
+    ) {
+        // trackedApps is empty, the installed apps are yet to be added to the database; and so,
+        // there's no need to refresh these mappings as apps tracked by FirewallManager is empty
+        if (trackedApps.isEmpty()) {
+            Logger.i(LOG_TAG_APP_DB, "refreshProxyMapping: trackedApps is empty")
+            return
         }
 
-        return appInfo
+        // remove all apps from proxy mapping and add the apps from tracked apps
+        if (emptyAll) {
+            ProxyManager.clear()
+            trackedApps
+                .map { FirewallManager.getAppInfoByPackage(it.packageName) }
+                .forEach { ProxyManager.addNewApp(it) } // it may be null, esp for non-apps
+            Logger.i(
+                LOG_TAG_APP_DB,
+                "empty proxy mapping, trackedApps: ${trackedApps.size}, proxy mapping: ${ProxyManager.trackedApps().size}"
+            )
+            return
+        }
+
+        ProxyManager.purgeDupsBeforeRefresh()
+
+        // remove the apps from proxy mapping which are not tracked by app info repository
+        val pxm = ProxyManager.trackedApps()
+        val del = findPackagesToDelete(pxm, trackedApps)
+        val add =
+            findPackagesToAdd(pxm, trackedApps).map {
+                FirewallManager.getAppInfoByPackage(it.packageName)
+            }
+        ProxyManager.deleteApps(del)
+        ProxyManager.addApps(add)
+        Logger.i(
+            LOG_TAG_APP_DB,
+            "refreshing proxy mapping, size: ${pxm.size}, trackedApps: ${trackedApps.size}"
+        )
     }
 
     private suspend fun insertUnknownApp(uid: Int) {
-        val appDetail = AndroidUidConfig.fromFileSystemUid(uid)
-        val appInfo = AppInfo(null)
+        val androidUidConfig = AndroidUidConfig.fromFileSystemUid(uid)
+        val newAppInfo = AppInfo(null)
 
-        val appName =
-            if (appDetail.uid == Constants.INVALID_UID) {
-                appInfo.isSystemApp = false
-                context.getString(R.string.network_log_app_name_unnamed, uid.toString())
+        newAppInfo.appName =
+            if (androidUidConfig.uid == Constants.INVALID_UID) {
+                newAppInfo.isSystemApp = false
+                ctx.getString(R.string.network_log_app_name_unnamed, uid.toString())
             } else {
-                appInfo.isSystemApp = true
-                appDetail.name
+                newAppInfo.isSystemApp = true
+                androidUidConfig.name
             }
+        newAppInfo.packageName = "no_package_$uid"
+        newAppInfo.appCategory = ctx.getString(FirewallManager.CategoryConstants.NON_APP.nameResId)
+        newAppInfo.uid = uid
 
-        appInfo.appName = appName
-        appInfo.packageName = "no_package_$uid"
-        appInfo.appCategory = context.getString(FirewallManager.CategoryConstants.NON_APP.nameResId)
-
-        appInfo.uid = uid
         if (persistentState.getBlockNewlyInstalledApp()) {
-            appInfo.firewallStatus = FirewallManager.FirewallStatus.NONE.id
-            appInfo.connectionStatus = FirewallManager.ConnectionStatus.BOTH.id
+            newAppInfo.firewallStatus = FirewallManager.FirewallStatus.NONE.id
+            newAppInfo.connectionStatus = FirewallManager.ConnectionStatus.BOTH.id
         }
 
-        FirewallManager.persistAppInfo(appInfo)
-        ProxyManager.addNewApp(appInfo)
+        FirewallManager.persistAppInfo(newAppInfo)
+        ProxyManager.addNewApp(newAppInfo)
     }
 
-    suspend fun refreshProxyMapping() {
-        // remove the apps from proxy mapping which are not tracked by app info repository
-        val proxyMapping = ProxyManager.getProxyMapping()
-        val trackedApps = FirewallManager.getAllAppsUid()
-        Log.i(
-            "AppDatabase",
-            "refreshing proxy mapping, size: ${proxyMapping.size}, trackedApps: ${trackedApps.size}"
-        )
-        proxyMapping.forEach {
-            if (!trackedApps.contains(it)) {
-                ProxyManager.deleteApp(FirewallManager.AppInfoTuple(it.uid, it.packageName))
-            }
-        }
+    private suspend fun updateApp(oldUid: Int, newUid: Int, pkg: String) {
+        Logger.i(LOG_TAG_APP_DB, "update app; oldUid: $oldUid, newUid: $newUid, pkg: $pkg")
+        FirewallManager.updateUid(oldUid, newUid, pkg)
     }
 
-    private suspend fun insertApp(appInfo: ApplicationInfo) {
-        val appName = context.packageManager.getApplicationLabel(appInfo).toString()
-        Log.i(LOG_TAG_APP_DB, "insert app: $appName")
-
-        val isSystemApp = isSystemApp(appInfo)
+    private suspend fun insertApp(ai: ApplicationInfo) {
+        val appName = ctx.packageManager.getApplicationLabel(ai).toString()
+        val isSystemApp = isSystemApp(ai)
         val entry = AppInfo(null)
 
         entry.appName = appName
 
-        entry.packageName = appInfo.packageName
-        entry.uid = appInfo.uid
+        entry.packageName = ai.packageName
+        // uid may be different from the one in ai, if the app is installed in a different user
+        // see: fetchApplicationInfo()
+        entry.uid = ai.uid
         entry.isSystemApp = isSystemApp
 
         // do not firewall app by default, if blockNewlyInstalledApp is set to false
@@ -355,18 +470,16 @@ internal constructor(
             entry.connectionStatus = FirewallManager.ConnectionStatus.ALLOW.id
         }
 
-        entry.appCategory = determineAppCategory(appInfo)
+        entry.appCategory = determineAppCategory(ai)
 
+        Logger.i(LOG_TAG_APP_DB, "insert app: $ai")
         FirewallManager.persistAppInfo(entry)
         ProxyManager.addNewApp(entry)
     }
 
-    private fun handleNewAppNotification(apps: HashSet<FirewallManager.AppInfoTuple>) {
-        // no need to notify if the Universal setting is off
+    private suspend fun maybeSendNewAppNotification(apps: Set<FirewallManager.AppInfoTuple>) {
+        // need not notify if "block newly installed apps" is off: insertApp() & insertUnkownApp()
         if (!persistentState.getBlockNewlyInstalledApp()) return
-
-        // if there is no apps in the cache, don't show the notification
-        if (FirewallManager.getTotalApps() == 0) return
 
         val appCount = apps.count()
         // Show bulk notification when the app size is greater than NEW_APP_BULK_CHECK_COUNT(5)
@@ -384,40 +497,34 @@ internal constructor(
         if (!persistentState.getBlockNewlyInstalledApp()) return
 
         val notificationManager =
-            context.getSystemService(VpnService.NOTIFICATION_SERVICE) as NotificationManager
-        if (DEBUG)
-            Log.d(LoggerConstants.LOG_TAG_VPN, "Number of new apps: $appSize, show notification")
+            ctx.getSystemService(VpnService.NOTIFICATION_SERVICE) as NotificationManager
+        Logger.d(LOG_TAG_VPN, "Number of new apps: $appSize, show notification")
 
-        val intent = Intent(context, NotificationHandlerDialog::class.java)
+        val intent = Intent(ctx, NotificationHandlerDialog::class.java)
         intent.putExtra(
             Constants.NOTIF_INTENT_EXTRA_NEW_APP_NAME,
             Constants.NOTIF_INTENT_EXTRA_NEW_APP_VALUE
         )
 
         val pendingIntent =
-            getActivityPendingIntent(context, intent, PendingIntent.FLAG_ONE_SHOT, mutable = false)
+            getActivityPendingIntent(ctx, intent, PendingIntent.FLAG_ONE_SHOT, mutable = false)
 
         var builder: NotificationCompat.Builder
         if (isAtleastO()) {
-            val name: CharSequence = context.getString(R.string.notif_channel_firewall_alerts)
-            val description =
-                context.resources.getString(R.string.notif_channel_desc_firewall_alerts)
+            val name: CharSequence = ctx.getString(R.string.notif_channel_firewall_alerts)
+            val description = ctx.resources.getString(R.string.notif_channel_desc_firewall_alerts)
             val importance = NotificationManager.IMPORTANCE_HIGH
             val channel = NotificationChannel(NOTIF_CHANNEL_ID_FIREWALL_ALERTS, name, importance)
             channel.description = description
             notificationManager.createNotificationChannel(channel)
-            builder = NotificationCompat.Builder(context, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
+            builder = NotificationCompat.Builder(ctx, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
         } else {
-            builder = NotificationCompat.Builder(context, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
+            builder = NotificationCompat.Builder(ctx, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
         }
 
-        val contentTitle: String =
-            context.resources.getString(R.string.new_app_bulk_notification_title)
+        val contentTitle: String = ctx.resources.getString(R.string.new_app_bulk_notification_title)
         val contentText: String =
-            context.resources.getString(
-                R.string.new_app_bulk_notification_content,
-                appSize.toString()
-            )
+            ctx.resources.getString(R.string.new_app_bulk_notification_content, appSize.toString())
 
         builder
             .setSmallIcon(R.drawable.ic_notification_icon)
@@ -426,8 +533,7 @@ internal constructor(
             .setContentText(contentText)
 
         builder.setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
-        builder.color =
-            ContextCompat.getColor(context, UIUtils.getAccentColor(persistentState.theme))
+        builder.color = ContextCompat.getColor(ctx, UIUtils.getAccentColor(persistentState.theme))
 
         // Secret notifications are not shown on the lock screen.  No need for this app to show
         // there.
@@ -444,31 +550,31 @@ internal constructor(
         )
     }
 
-    private fun showNewAppNotificationIfNeeded(app: FirewallManager.AppInfoTuple) {
+    private suspend fun showNewAppNotificationIfNeeded(app: FirewallManager.AppInfoTuple) {
         // no need to notify if the Universal setting is off
         if (!persistentState.getBlockNewlyInstalledApp()) return
 
         // no need to notify if the vpn is not on
         if (!VpnController.isOn()) return
 
-        if (app.packageName.isEmpty()) {
-            app.packageName = FirewallManager.getPackageNameByUid(app.uid) ?: ""
+        var pkgName = app.packageName
+        if (pkgName.isEmpty()) {
+            pkgName = FirewallManager.getPackageNameByUid(app.uid) ?: ""
         }
 
-        val appInfo = Utilities.getApplicationInfo(context, app.packageName)
+        val appInfo = Utilities.getApplicationInfo(ctx, pkgName)
         val appName =
             if (appInfo == null) {
                 app.uid
             } else {
-                context.packageManager.getApplicationLabel(appInfo).toString()
+                ctx.packageManager.getApplicationLabel(appInfo).toString()
             }
 
         val notificationManager =
-            context.getSystemService(VpnService.NOTIFICATION_SERVICE) as NotificationManager
-        if (DEBUG)
-            Log.d(LoggerConstants.LOG_TAG_VPN, "New app installed: $appName, show notification")
+            ctx.getSystemService(VpnService.NOTIFICATION_SERVICE) as NotificationManager
+        Logger.d(LOG_TAG_VPN, "New app installed: $appName, show notification")
 
-        val intent = Intent(context, NotificationHandlerDialog::class.java)
+        val intent = Intent(ctx, NotificationHandlerDialog::class.java)
         intent.putExtra(
             Constants.NOTIF_INTENT_EXTRA_NEW_APP_NAME,
             Constants.NOTIF_INTENT_EXTRA_NEW_APP_VALUE
@@ -476,7 +582,7 @@ internal constructor(
 
         val pendingIntent =
             getActivityPendingIntent(
-                context,
+                ctx,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT,
                 mutable = false
@@ -484,21 +590,20 @@ internal constructor(
 
         val builder: NotificationCompat.Builder
         if (isAtleastO()) {
-            val name: CharSequence = context.getString(R.string.notif_channel_firewall_alerts)
-            val description =
-                context.resources.getString(R.string.notif_channel_desc_firewall_alerts)
+            val name: CharSequence = ctx.getString(R.string.notif_channel_firewall_alerts)
+            val description = ctx.resources.getString(R.string.notif_channel_desc_firewall_alerts)
             val importance = NotificationManager.IMPORTANCE_HIGH
             val channel = NotificationChannel(NOTIF_CHANNEL_ID_FIREWALL_ALERTS, name, importance)
             channel.description = description
             notificationManager.createNotificationChannel(channel)
-            builder = NotificationCompat.Builder(context, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
+            builder = NotificationCompat.Builder(ctx, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
         } else {
-            builder = NotificationCompat.Builder(context, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
+            builder = NotificationCompat.Builder(ctx, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
         }
 
-        val contentTitle: String = context.resources.getString(R.string.lbl_action_required)
+        val contentTitle: String = ctx.resources.getString(R.string.lbl_action_required)
         val contentText: String =
-            context.resources.getString(R.string.new_app_notification_content, appName)
+            ctx.resources.getString(R.string.new_app_notification_content, appName)
 
         builder
             .setSmallIcon(R.drawable.ic_notification_icon)
@@ -507,12 +612,11 @@ internal constructor(
             .setContentText(contentText)
 
         builder.setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
-        builder.color =
-            ContextCompat.getColor(context, UIUtils.getAccentColor(persistentState.theme))
+        builder.color = ContextCompat.getColor(ctx, UIUtils.getAccentColor(persistentState.theme))
 
         val openIntent1 =
             makeNewAppVpnIntent(
-                context,
+                ctx,
                 Constants.NOTIF_ACTION_NEW_APP_ALLOW,
                 app.uid,
                 PENDING_INTENT_REQUEST_CODE_ALLOW
@@ -520,7 +624,7 @@ internal constructor(
 
         val openIntent2 =
             makeNewAppVpnIntent(
-                context,
+                ctx,
                 Constants.NOTIF_ACTION_NEW_APP_DENY,
                 app.uid,
                 PENDING_INTENT_REQUEST_CODE_DENY
@@ -528,27 +632,89 @@ internal constructor(
         val notificationAction: NotificationCompat.Action =
             NotificationCompat.Action(
                 0,
-                context.resources.getString(R.string.allow).uppercase(),
+                ctx.resources.getString(R.string.allow).uppercase(),
                 openIntent1
             )
         val notificationAction2: NotificationCompat.Action =
             NotificationCompat.Action(
                 0,
-                context.resources.getString(R.string.new_app_notification_action_deny).uppercase(),
+                ctx.resources.getString(R.string.new_app_notification_action_deny).uppercase(),
                 openIntent2
             )
         builder.addAction(notificationAction)
         builder.addAction(notificationAction2)
 
-        // Secret notifications are not shown on the lock screen.  No need for this app to show
-        // there.
-        // Only available in API >= 21
+        // API >= 21 only
         builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
-
-        // Cancel the notification after clicking.
         builder.setAutoCancel(true)
 
         notificationManager.notify(NOTIF_CHANNEL_ID_FIREWALL_ALERTS, app.uid, builder.build())
+    }
+
+    private suspend fun notifyEmptyFirewallRulesIfNeeded() {
+        val trackedApps = FirewallManager.getAllApps()
+        if (trackedApps.isNotEmpty()) {
+            return
+        }
+
+        val intent = Intent(ctx, HomeScreenActivity::class.java)
+        val nm = ctx.getSystemService(VpnService.NOTIFICATION_SERVICE) as NotificationManager
+        val pendingIntent =
+            Utilities.getActivityPendingIntent(
+                ctx,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT,
+                mutable = false
+            )
+        if (isAtleastO()) {
+            val name: CharSequence = ctx.getString(R.string.notif_channel_firewall_alerts)
+            val description = ctx.resources.getString(R.string.notif_channel_desc_firewall_alerts)
+            val importance = NotificationManager.IMPORTANCE_HIGH
+            val channel = NotificationChannel(NOTIF_CHANNEL_ID_FIREWALL_ALERTS, name, importance)
+            channel.description = description
+            nm.createNotificationChannel(channel)
+        }
+        var builder: NotificationCompat.Builder =
+            NotificationCompat.Builder(ctx, NOTIF_CHANNEL_ID_FIREWALL_ALERTS)
+
+        val contentTitle = ctx.resources.getString(R.string.rules_load_failure_heading)
+        val contentText = ctx.resources.getString(R.string.rules_load_failure_desc)
+        builder
+            .setSmallIcon(R.drawable.ic_notification_icon)
+            .setContentTitle(contentTitle)
+            .setContentIntent(pendingIntent)
+            .setContentText(contentText)
+        builder.setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
+        builder.color = ContextCompat.getColor(ctx, UIUtils.getAccentColor(persistentState.theme))
+        val openIntent =
+            makeVpnIntent(NOTIF_ID_LOAD_RULES_FAIL, Constants.NOTIF_ACTION_RULES_FAILURE)
+        val notificationAction: NotificationCompat.Action =
+            NotificationCompat.Action(
+                0,
+                ctx.resources.getString(R.string.rules_load_failure_reload),
+                openIntent
+            )
+        builder.addAction(notificationAction)
+
+        // Secret notifications are not shown on the lock screen.  No need for this app to show
+        // there.
+        // Only available in API >= 21
+        builder = builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+
+        builder.build()
+        nm.notify(NOTIF_CHANNEL_ID_FIREWALL_ALERTS, NOTIF_ID_LOAD_RULES_FAIL, builder.build())
+    }
+    // keep in sync with BraveVPNServie#makeVpnIntent
+    private fun makeVpnIntent(id: Int, extra: String): PendingIntent {
+        val intent = Intent(ctx, NotificationActionReceiver::class.java)
+        intent.putExtra(Constants.NOTIFICATION_ACTION, extra)
+        return Utilities.getBroadcastPendingIntent(
+            ctx,
+            id,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT,
+            mutable = false
+        )
     }
 
     private fun makeNewAppVpnIntent(
@@ -556,7 +722,7 @@ internal constructor(
         intentExtra: String,
         uid: Int,
         requestCode: Int
-    ): PendingIntent? {
+    ): PendingIntent {
         val intent = Intent(context, NotificationActionReceiver::class.java)
         intent.putExtra(Constants.NOTIFICATION_ACTION, intentExtra)
         intent.putExtra(Constants.NOTIF_INTENT_EXTRA_APP_UID, uid)
@@ -589,25 +755,24 @@ internal constructor(
         }
 
         if (isSystemComponent(ai)) {
-            return context.getString(FirewallManager.CategoryConstants.SYSTEM_COMPONENT.nameResId)
+            return ctx.getString(FirewallManager.CategoryConstants.SYSTEM_COMPONENT.nameResId)
         }
 
         if (isSystemApp(ai)) {
-            return context.getString(FirewallManager.CategoryConstants.SYSTEM_APP.nameResId)
+            return ctx.getString(FirewallManager.CategoryConstants.SYSTEM_APP.nameResId)
         }
 
         if (isAtleastO()) {
             return replaceUnderscore(appInfoCategory(ai))
         }
 
-        return context.getString(FirewallManager.CategoryConstants.INSTALLED.nameResId)
+        return ctx.getString(FirewallManager.CategoryConstants.INSTALLED.nameResId)
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
     private fun appInfoCategory(ai: ApplicationInfo): String {
-        val cat = ApplicationInfo.getCategoryTitle(context, ai.category)
-        return cat?.toString()
-            ?: context.getString(FirewallManager.CategoryConstants.OTHER.nameResId)
+        val cat = ApplicationInfo.getCategoryTitle(ctx, ai.category)
+        return cat?.toString() ?: ctx.getString(FirewallManager.CategoryConstants.OTHER.nameResId)
     }
 
     private fun replaceUnderscore(s: String): String {
@@ -618,6 +783,10 @@ internal constructor(
         // purge logs older than specified date
         dnsLogRepository.purgeDnsLogsByDate(date)
         connTrackerRepository.purgeLogsByDate(date)
+    }
+
+    private fun printAll(c: Collection<FirewallManager.AppInfoTuple>, tag: String) {
+        c.forEach { Logger.i(LOG_TAG_APP_DB, "$tag: ${it.uid}, ${it.packageName}") }
     }
 
     /** Below code to fetch the google play service-application category Not in use as of now. */
@@ -672,7 +841,6 @@ internal constructor(
         } else appCategoryType
     }*/
 
-    private suspend fun ioCtx(f: suspend () -> Unit) {
-        withContext(Dispatchers.IO) { f() }
-    }
+    private fun io(s: String, f: suspend () -> Unit) =
+        CoroutineScope(CoroutineName(s) + Dispatchers.IO).launch { f() }
 }

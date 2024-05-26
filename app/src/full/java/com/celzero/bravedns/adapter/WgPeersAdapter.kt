@@ -27,7 +27,8 @@ import com.celzero.bravedns.R
 import com.celzero.bravedns.databinding.ListItemWgPeersBinding
 import com.celzero.bravedns.service.WireguardManager
 import com.celzero.bravedns.service.WireguardManager.WARP_ID
-import com.celzero.bravedns.ui.WgAddPeerDialog
+import com.celzero.bravedns.ui.dialog.WgAddPeerDialog
+import com.celzero.bravedns.util.UIUtils
 import com.celzero.bravedns.wireguard.Peer
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,6 @@ import kotlinx.coroutines.withContext
 
 class WgPeersAdapter(
     val context: Context,
-    private val lifecycleOwner: LifecycleOwner,
     private val themeId: Int,
     private val configId: Int,
     private var peers: MutableList<Peer>
@@ -77,16 +77,14 @@ class WgPeersAdapter(
                 b.allowedIpsLabel.visibility = View.GONE
             }
             if (wgPeer.persistentKeepalive.isPresent) {
-                b.persistentKeepaliveText.text = wgPeer.persistentKeepalive.get().toString()
+                b.persistentKeepaliveText.text =
+                    UIUtils.getDurationInHumanReadableFormat(
+                        context,
+                        wgPeer.persistentKeepalive.get()
+                    )
             } else {
                 b.persistentKeepaliveText.visibility = View.GONE
                 b.persistentKeepaliveLabel.visibility = View.GONE
-            }
-            if (wgPeer.getPreSharedKey().isPresent) {
-                b.preSharedKeyText.text = wgPeer.getPreSharedKey().get().base64()
-            } else {
-                b.preSharedKeyText.visibility = View.GONE
-                b.preSharedKeyLabel.visibility = View.GONE
             }
             b.publicKeyText.text = wgPeer.getPublicKey().base64()
 
@@ -110,18 +108,26 @@ class WgPeersAdapter(
 
     fun dataChanged() {
         peers.clear()
-        peers.addAll(WireguardManager.getPeers(configId))
-        this?.notifyDataSetChanged()
+        io {
+            val p = WireguardManager.getPeers(configId)
+            peers.addAll(p)
+            uiCtx { this?.notifyDataSetChanged() }
+        }
     }
 
     private fun showDeleteInterfaceDialog(wgPeer: Peer) {
         val builder = MaterialAlertDialogBuilder(context)
-        builder.setTitle("Delete?")
-        builder.setMessage("Are you sure you want to delete this Config?")
+        val delText =
+            context.getString(
+                R.string.two_argument_space,
+                context.getString(R.string.config_delete_dialog_title),
+                context.getString(R.string.lbl_peer)
+            )
+        builder.setTitle(delText)
+        builder.setMessage(context.getString(R.string.config_delete_dialog_desc))
         builder.setCancelable(true)
-        builder.setPositiveButton(context.getString(R.string.lbl_delete)) { _, _ ->
-            deletePeer(wgPeer)
-        }
+
+        builder.setPositiveButton(delText) { _, _ -> deletePeer(wgPeer) }
 
         builder.setNegativeButton(context.getString(R.string.lbl_cancel)) { _, _ ->
             // no-op
@@ -130,20 +136,18 @@ class WgPeersAdapter(
     }
 
     private fun deletePeer(wgPeer: Peer) {
-        ui {
-            ioCtx {
-                WireguardManager.deletePeer(configId, wgPeer)
-                peers = WireguardManager.getPeers(configId)
-            }
-            this.notifyDataSetChanged()
+        io {
+            WireguardManager.deletePeer(configId, wgPeer)
+            peers = WireguardManager.getPeers(configId)
+            uiCtx { this.notifyDataSetChanged() }
         }
     }
 
-    private suspend fun ioCtx(f: suspend () -> Unit) {
-        withContext(Dispatchers.IO) { f() }
+    private suspend fun uiCtx(f: suspend () -> Unit) {
+        withContext(Dispatchers.Main) { f() }
     }
 
-    private fun ui(f: suspend () -> Unit) {
-        lifecycleOwner.lifecycleScope.launch { withContext(Dispatchers.Main) { f() } }
+    private fun io(f: suspend () -> Unit) {
+        (context as LifecycleOwner).lifecycleScope.launch(Dispatchers.IO) { f() }
     }
 }

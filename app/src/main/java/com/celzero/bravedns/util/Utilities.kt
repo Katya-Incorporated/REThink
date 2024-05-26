@@ -15,6 +15,11 @@
  */
 package com.celzero.bravedns.util
 
+import Logger
+import Logger.LOG_TAG_APP_DB
+import Logger.LOG_TAG_DOWNLOAD
+import Logger.LOG_TAG_FIREWALL
+import Logger.LOG_TAG_VPN
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.PendingIntent
@@ -28,11 +33,11 @@ import android.content.pm.ServiceInfo
 import android.graphics.drawable.Drawable
 import android.net.ConnectivityManager
 import android.net.LinkProperties
+import android.net.Network
 import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
 import android.text.TextUtils.SimpleStringSplitter
-import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
 import androidx.appcompat.content.res.AppCompatResources
@@ -40,7 +45,6 @@ import androidx.core.content.getSystemService
 import androidx.lifecycle.LifecycleCoroutineScope
 import com.celzero.bravedns.BuildConfig
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.database.AppInfoRepository.Companion.NO_PACKAGE
 import com.celzero.bravedns.net.doh.CountryMap
 import com.celzero.bravedns.service.BraveVPNService
@@ -55,17 +59,12 @@ import com.celzero.bravedns.util.Constants.Companion.MISSING_UID
 import com.celzero.bravedns.util.Constants.Companion.REMOTE_BLOCKLIST_DOWNLOAD_FOLDER_NAME
 import com.celzero.bravedns.util.Constants.Companion.UNSPECIFIED_IP_IPV4
 import com.celzero.bravedns.util.Constants.Companion.UNSPECIFIED_IP_IPV6
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_APP_DB
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_DNS
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_DOWNLOAD
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_FIREWALL
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_VPN
 import com.google.common.base.CharMatcher
 import com.google.common.net.InternetDomainName
+import com.google.gson.JsonParser
 import inet.ipaddr.HostName
 import inet.ipaddr.IPAddress
 import inet.ipaddr.IPAddressString
-import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -77,6 +76,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.ln
+import kotlinx.coroutines.launch
+import okio.HashingSink
+import okio.blackholeSink
+import okio.buffer
+import okio.source
 
 object Utilities {
 
@@ -118,7 +123,10 @@ object Utilities {
             am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
         for (enabledService in enabledServices) {
             val enabledServiceInfo: ServiceInfo = enabledService.resolveInfo.serviceInfo
-            Log.i(LOG_TAG_VPN, "Accessibility enabled check for: ${enabledServiceInfo.packageName}")
+            Logger.i(
+                LOG_TAG_VPN,
+                "Accessibility enabled check for: ${enabledServiceInfo.packageName}"
+            )
             if (
                 enabledServiceInfo.packageName == context.packageName &&
                     enabledServiceInfo.name == service.name
@@ -126,7 +134,7 @@ object Utilities {
                 return true
             }
         }
-        Log.e(
+        Logger.e(
             LOG_TAG_VPN,
             "Accessibility failure, ${context.packageName},  ${service.name}, return size: ${enabledServices.count()}"
         )
@@ -143,30 +151,28 @@ object Utilities {
                 Settings.Secure.getString(
                     context.contentResolver,
                     Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-                )
-                    ?: return false
+                ) ?: return false
             val colonSplitter = SimpleStringSplitter(':')
             colonSplitter.setString(enabledServicesSetting)
             while (colonSplitter.hasNext()) {
                 val componentNameString = colonSplitter.next()
                 val enabledService = ComponentName.unflattenFromString(componentNameString)
                 if (expectedComponentName == enabledService) {
-                    if (DEBUG)
-                        Log.i(
-                            LOG_TAG_VPN,
-                            "SettingsSecure accessibility enabled for: ${expectedComponentName.packageName}"
-                        )
+                    Logger.i(
+                        LOG_TAG_VPN,
+                        "SettingsSecure accessibility enabled for: ${expectedComponentName.packageName}"
+                    )
                     return true
                 }
             }
         } catch (e: Settings.SettingNotFoundException) {
-            Log.e(
+            Logger.e(
                 LOG_TAG_VPN,
                 "isAccessibilityServiceEnabled Exception on isAccessibilityServiceEnabledViaSettingsSecure() ${e.message}",
                 e
             )
         }
-        Log.w(LOG_TAG_VPN, "Accessibility service not enabled via Settings Secure")
+        Logger.w(LOG_TAG_VPN, "Accessibility service not enabled via Settings Secure")
         return isAccessibilityServiceEnabled(context, accessibilityService)
     }
 
@@ -190,7 +196,7 @@ object Utilities {
         try {
             countryMap = CountryMap(context.assets)
         } catch (e: IOException) {
-            Log.e(LOG_TAG_VPN, "Failure fetching country map ${e.message}", e)
+            Logger.e(LOG_TAG_VPN, "Failure fetching country map ${e.message}", e)
         }
     }
 
@@ -223,7 +229,7 @@ object Utilities {
         // no need to check if IP is not of type IPv6
         if (!IPUtil.isIpV6(ipAddress)) return ip
 
-        val ipv4 = IPUtil.toIpV4(ipAddress)
+        val ipv4 = IPUtil.ip4in6(ipAddress)
 
         return if (ipv4 != null) {
             ipv4.toInetAddress()
@@ -253,11 +259,15 @@ object Utilities {
         return ip.isLoopback || ip.isLocal || ip.isAnyLocal || UNSPECIFIED_IP_IPV4.equals(ip)
     }
 
-    fun isValidLocalPort(port: Int): Boolean {
+    fun isValidLocalPort(port: Int?): Boolean {
+        if (port == null) return false
+
         return isValidPort(port)
     }
 
-    fun isValidPort(port: Int): Boolean {
+    fun isValidPort(port: Int?): Boolean {
+        if (port == null) return false
+
         return port in 65535 downTo 0
     }
 
@@ -280,11 +290,13 @@ object Utilities {
         try {
             Toast.makeText(context, message, toastLength).show()
         } catch (e: IllegalStateException) {
-            Log.w(LOG_TAG_VPN, "Show Toast issue : ${e.message}", e)
+            Logger.w(LOG_TAG_VPN, "toast err: ${e.message}")
         } catch (e: IllegalAccessException) {
-            Log.w(LOG_TAG_VPN, "Show Toast issue : ${e.message}", e)
+            Logger.w(LOG_TAG_VPN, "toast err: ${e.message}")
         } catch (e: IOException) {
-            Log.w(LOG_TAG_VPN, "Show Toast issue : ${e.message}", e)
+            Logger.w(LOG_TAG_VPN, "toast err: ${e.message}")
+        } catch (e: Exception) {
+            Logger.w(LOG_TAG_VPN, "toast err: ${e.message}")
         }
     }
 
@@ -301,24 +313,21 @@ object Utilities {
                     pm.getPackageInfo(pi, PackageManager.GET_META_DATA)
                 }
         } catch (e: PackageManager.NameNotFoundException) {
-            Log.w(LOG_TAG_APP_DB, "Application not available $pi" + e.message, e)
+            Logger.w(LOG_TAG_APP_DB, "Application not available $pi" + e.message, e)
         }
         return metadata
     }
 
-    fun isFreshInstall(context: Context): Boolean {
+    fun isFreshInstall(ctx: Context): Boolean {
         try {
             with(
                 if (isAtleastT()) {
-                    context.packageManager.getPackageInfo(
-                        context.packageName,
+                    ctx.packageManager.getPackageInfo(
+                        ctx.packageName,
                         PackageManager.PackageInfoFlags.of(PackageManager.GET_META_DATA.toLong())
                     )
                 } else {
-                    context.packageManager.getPackageInfo(
-                        context.packageName,
-                        PackageManager.GET_META_DATA
-                    )
+                    ctx.packageManager.getPackageInfo(ctx.packageName, PackageManager.GET_META_DATA)
                 }
             ) {
                 return firstInstallTime == lastUpdateTime
@@ -327,7 +336,7 @@ object Utilities {
             // assign value as true as the package name not found, should not be the
             // case but some devices seems to return package not found immediately
             // after install
-            Log.w(LOG_TAG_APP_DB, "Application not available ${context.packageName}" + e.message, e)
+            Logger.w(LOG_TAG_APP_DB, "app not found ${ctx.packageName}" + e.message, e)
             return true
         }
     }
@@ -341,7 +350,7 @@ object Utilities {
 
             src.copyTo(dest, true)
         } catch (e: Exception) { // Throws NoSuchFileException, IOException
-            Log.e(LOG_TAG_DOWNLOAD, "Error copying file ${e.message}", e)
+            Logger.e(LOG_TAG_DOWNLOAD, "Error copying file ${e.message}", e)
             return false
         }
 
@@ -363,7 +372,7 @@ object Utilities {
             writeStream.close()
             true
         } catch (e: Exception) {
-            Log.w(LOG_TAG_DOWNLOAD, "Issue while copying files using streams: ${e.message}, $e")
+            Logger.w(LOG_TAG_DOWNLOAD, "Issue while copying files using streams: ${e.message}, $e")
             false
         }
     }
@@ -382,8 +391,13 @@ object Utilities {
             return vpnService?.isAlwaysOn == true
         }
 
-        val alwaysOn = Settings.Secure.getString(context.contentResolver, "always_on_vpn_app")
-        return context.packageName == alwaysOn
+        return try {
+            val alwaysOn = Settings.Secure.getString(context.contentResolver, "always_on_vpn_app")
+            context.packageName == alwaysOn
+        } catch (e: Exception) {
+            Logger.e(LOG_TAG_VPN, "Failure while retrieving Settings.Secure value ${e.message}", e)
+            false
+        }
     }
 
     // This function is not supported from version 12 onwards.
@@ -392,25 +406,25 @@ object Utilities {
             val alwaysOn = Settings.Secure.getString(context.contentResolver, "always_on_vpn_app")
             !TextUtils.isEmpty(alwaysOn) && context.packageName != alwaysOn
         } catch (e: Exception) {
-            Log.e(LOG_TAG_VPN, "Failure while retrieving Settings.Secure value ${e.message}", e)
+            Logger.e(LOG_TAG_VPN, "Failure while retrieving Settings.Secure value ${e.message}", e)
             false
         }
     }
 
-    fun getIcon(context: Context, packageName: String, appName: String?): Drawable? {
+    fun getIcon(ctx: Context, packageName: String, appName: String? = null): Drawable? {
         if (!isValidAppName(appName, packageName)) {
-            return getDefaultIcon(context)
+            return getDefaultIcon(ctx)
         }
 
         return try {
-            context.packageManager.getApplicationIcon(packageName)
+            ctx.packageManager.getApplicationIcon(packageName)
         } catch (e: PackageManager.NameNotFoundException) {
             // Not adding exception details in logs.
-            Log.e(
+            Logger.e(
                 LOG_TAG_FIREWALL,
                 "Application Icon not available for package: $packageName" + e.message
             )
-            getDefaultIcon(context)
+            getDefaultIcon(ctx)
         }
     }
 
@@ -422,20 +436,24 @@ object Utilities {
         return AppCompatResources.getDrawable(context, R.drawable.default_app_icon)
     }
 
-    fun delay(ms: Long, lifecycleScope: LifecycleCoroutineScope, updateUi: () -> Unit) {
-        lifecycleScope.launch {
+    fun delay(ms: Long, scope: LifecycleCoroutineScope, updateUi: () -> Unit) {
+        scope.launch {
             kotlinx.coroutines.delay(ms)
-            updateUi()
+            try {
+                updateUi()
+            } catch (e: Exception) {
+                Logger.e(LOG_TAG_VPN, "Failure in delay function ${e.message}", e)
+            }
         }
     }
 
-    fun getPackageInfoForUid(context: Context, uid: Int): Array<out String>? {
+    fun getPackageInfoForUid(ctx: Context, uid: Int): Array<out String>? {
         try {
-            return context.packageManager.getPackagesForUid(uid)
+            return ctx.packageManager.getPackagesForUid(uid)
         } catch (e: PackageManager.NameNotFoundException) {
-            Log.w(LoggerConstants.LOG_TAG_FIREWALL_LOG, "Package Not Found: " + e.message)
+            Logger.w(LOG_TAG_FIREWALL, "Package Not Found: " + e.message)
         } catch (e: SecurityException) {
-            Log.w(LoggerConstants.LOG_TAG_FIREWALL_LOG, "Package Not Found: " + e.message)
+            Logger.w(LOG_TAG_FIREWALL, "Package Not Found: " + e.message)
         }
         return null
     }
@@ -452,6 +470,10 @@ object Utilities {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
     }
 
+    fun isAtleastP(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+    }
+
     fun isAtleastQ(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
     }
@@ -462,6 +484,10 @@ object Utilities {
 
     fun isAtleastT(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    }
+
+    fun isAtleastU(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
     }
 
     fun isFdroidFlavour(): Boolean {
@@ -480,21 +506,18 @@ object Utilities {
         return BuildConfig.FLAVOR_releaseType == FLAVOR_HEADLESS
     }
 
-    fun getApplicationInfo(context: Context, packageName: String): ApplicationInfo? {
+    fun getApplicationInfo(ctx: Context, packageName: String): ApplicationInfo? {
         return try {
             if (isAtleastT()) {
-                context.packageManager.getApplicationInfo(
+                ctx.packageManager.getApplicationInfo(
                     packageName,
                     PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong())
                 )
             } else {
-                context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
+                ctx.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
             }
         } catch (e: PackageManager.NameNotFoundException) {
-            Log.w(
-                LOG_TAG_FIREWALL,
-                "ApplicationInfo is not available for package name: $packageName"
-            )
+            Logger.w(LOG_TAG_FIREWALL, "no app info for package name: $packageName")
             null
         }
     }
@@ -523,13 +546,9 @@ object Utilities {
                 } else {
                     fileOrDirectory.delete()
                 }
-            if (DEBUG)
-                Log.d(
-                    LOG_TAG_DOWNLOAD,
-                    "deleteRecursive File : ${fileOrDirectory.path}, $isDeleted"
-                )
+            Logger.d(LOG_TAG_DOWNLOAD, "deleteRecursive File : ${fileOrDirectory.path}, $isDeleted")
         } catch (e: Exception) {
-            Log.w(LOG_TAG_DOWNLOAD, "File delete exception: ${e.message}", e)
+            Logger.w(LOG_TAG_DOWNLOAD, "File delete exception: ${e.message}", e)
         }
     }
 
@@ -570,7 +589,7 @@ object Utilities {
 
             return File(localBlocklist)
         } catch (e: IOException) {
-            Log.e(LOG_TAG_VPN, "Could not fetch local blocklist: " + e.message, e)
+            Logger.e(LOG_TAG_VPN, "Could not fetch local blocklist: " + e.message, e)
             null
         }
     }
@@ -593,7 +612,7 @@ object Utilities {
         return try {
             File(blocklistDownloadBasePath(ctx, which, timestamp))
         } catch (e: IOException) {
-            Log.e(LOG_TAG_VPN, "Could not fetch remote blocklist: " + e.message, e)
+            Logger.e(LOG_TAG_VPN, "Could not fetch remote blocklist: " + e.message, e)
             null
         }
     }
@@ -602,13 +621,13 @@ object Utilities {
         return try {
             return File(dirPath + fileName)
         } catch (e: IOException) {
-            Log.e(LOG_TAG_VPN, "Could not fetch remote blocklist: " + e.message, e)
+            Logger.e(LOG_TAG_VPN, "Could not fetch remote blocklist: " + e.message, e)
             null
         }
     }
 
     fun isNonApp(p: String): Boolean {
-        return p.contains(NO_PACKAGE)
+        return p.startsWith(NO_PACKAGE)
     }
 
     fun removeLeadingAndTrailingDots(str: String?): String {
@@ -660,7 +679,7 @@ object Utilities {
             // earlier check of : will not work as now remote stamp can contain sec/rec
             return path.trimStart { it == '/' }.trimEnd { it == '/' }
         } catch (e: Exception) {
-            Log.w(LOG_TAG_DNS, "failure fetching stamp from Go ${e.message}", e)
+            Logger.w(Logger.LOG_TAG_DNS, "failure fetching stamp from Go ${e.message}", e)
             ""
         }
     }
@@ -723,18 +742,55 @@ object Utilities {
     fun humanReadableByteCount(bytes: Long, si: Boolean): String {
         val unit = if (si) 1000 else 1024
         if (bytes < unit) return "$bytes B"
-        val exp = (Math.log(bytes.toDouble()) / Math.log(unit.toDouble())).toInt()
-        val pre = ("KMGTPE")[exp - 1] + if (si) "" else "i"
-        return String.format("%.1f %sB", bytes / Math.pow(unit.toDouble(), exp.toDouble()), pre)
+        try {
+            val exp = (ln(bytes.toDouble()) / ln(unit.toDouble())).toInt()
+            val pre = ("KMGTPE")[exp - 1] + if (si) "" else "i"
+            val totalBytes = bytes / Math.pow(unit.toDouble(), exp.toDouble())
+            return String.format("%.1f %sB", totalBytes, pre)
+        } catch (e: NumberFormatException) {
+            Logger.e(LOG_TAG_DOWNLOAD, "Number format exception: ${e.message}", e)
+        } catch (e: Exception) {
+            Logger.e(LOG_TAG_DOWNLOAD, "err in humanReadableByteCount: ${e.message}", e)
+        }
+        return ""
     }
 
-    // get time in seconds and add "sec" or "min" or "hr" or "day" accordingly
-    fun getDurationInHumanReadableFormat(context: Context, sec: Int): String {
-        return when {
-            sec < 60 -> "$sec ${context.getString(R.string.lbl_sec)}"
-            sec < 3600 -> "${sec / 60} ${context.getString(R.string.lbl_min)}"
-            sec < 86400 -> "${sec / 3600} ${context.getString(R.string.lbl_hour)}"
-            else -> "${sec / 86400} ${context.getString(R.string.lbl_day)}"
+    fun calculateMd5(filePath: String): String {
+        // HashingSink will update the md5sum with every write call and then call down
+        // to blackholeSink(), ref: https://stackoverflow.com/a/61217039
+        return File(filePath).source().buffer().use { source ->
+            HashingSink.md5(blackholeSink()).use { sink ->
+                source.readAll(sink)
+                sink.hash.hex()
+            }
         }
+    }
+
+    fun getTagValueFromJson(path: String, tag: String): String {
+        var tagValue = ""
+        try {
+            // Read the JSON file
+            val jsonContent = File(path).readText()
+
+            // Parse JSON using JsonParser
+            val jsonObject = JsonParser.parseString(jsonContent).asJsonObject
+
+            // Extract the specific tag value
+            if (jsonObject.has(tag)) {
+                tagValue = jsonObject.get(tag).asString
+                Logger.i(LOG_TAG_DOWNLOAD, "get tag value: $tagValue, for tag: $tag")
+            } else {
+                Logger.i(LOG_TAG_DOWNLOAD, "tag not found: $tag")
+            }
+        } catch (e: Exception) {
+            Logger.e(LOG_TAG_DOWNLOAD, "err parsing the json file: ${e.message}", e)
+        }
+        return tagValue
+    }
+
+    fun isNetworkSame(n1: Network?, n2: Network?): Boolean {
+        if (n1 == null || n2 == null) return false
+
+        return n1.networkHandle == n2.networkHandle
     }
 }

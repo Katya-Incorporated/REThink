@@ -6,14 +6,14 @@
     android:layout_height="match_parent"
     android:background="?attr/background"
     android:orientation="vertical"
-    tools:context=".ui.FirewallActivity">
+    tools:context=".ui.activity.FirewallActivity">
 
     <com.google.android.material.tabs.TabLayout
         android:id="@+id/firewall_act_tabLayout"
         style="@style/TabbedLayoutDefault"
         android:layout_width="match_parent"
-        android:visibility="gone"
-        android:layout_height="wrap_content" />
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
 
     <androidx.viewpager2.widget.ViewPager2
         android:id="@+id/firewall_act_viewpager"

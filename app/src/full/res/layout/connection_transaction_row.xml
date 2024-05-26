@@ -27,6 +27,7 @@
             android:layout_height="32dp"
             android:layout_gravity="center"
             android:layout_margin="10dp"
+            android:alpha="0.9"
             android:contentDescription="@string/apps_icon_content_desc"
             android:src="@drawable/default_app_icon" />
 
@@ -108,11 +109,12 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="center"
+                        android:alpha="0.9"
                         android:ellipsize="none"
                         android:gravity="center"
+                        android:maxWidth="32dp"
                         android:maxHeight="16dp"
                         android:minWidth="16dp"
-                        android:maxWidth="32dp"
                         android:singleLine="true"
                         android:textAppearance="@style/TextAppearance.AppCompat.Headline"
                         android:textSize="26sp"

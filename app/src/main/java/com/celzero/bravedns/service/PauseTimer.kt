@@ -15,12 +15,11 @@
  */
 package com.celzero.bravedns.service
 
-import android.util.Log
+import Logger
+import Logger.LOG_TAG_UI
+import Logger.LOG_TAG_VPN
 import androidx.lifecycle.MutableLiveData
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.util.Constants.Companion.INIT_TIME_MS
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_UI
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_VPN
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -28,6 +27,7 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+// should this be replaced with developer.android.com/reference/android/os/CountDownTimer?
 object PauseTimer {
 
     // default duration for pause state: 15mins
@@ -35,42 +35,26 @@ object PauseTimer {
 
     private var countdownMs: AtomicLong = AtomicLong(DEFAULT_PAUSE_TIME_MS)
     private var pauseCountDownTimer: MutableLiveData<Long> = MutableLiveData()
-    private const val LOCKDOWN_STATUS_CHECK_TIME_IN_SEC = 30L
     private const val COUNT_DOWN_INTERVAL = 1000L
 
     // increment/decrement value to pause vpn
     val PAUSE_VPN_EXTRA_MILLIS = TimeUnit.MINUTES.toMillis(1)
 
     fun start(durationMs: Long) {
-        if (DEBUG) Log.d(LOG_TAG_UI, "timer started, duration: $durationMs")
-        CoroutineScope(Dispatchers.Main).launch {
+        Logger.d(LOG_TAG_UI, "timer started, duration: $durationMs")
+        io {
             try {
                 setCountdown(durationMs)
                 while (countdownMs.get() > 0L) {
                     delay(COUNT_DOWN_INTERVAL)
-                    val c = addCountdown(-COUNT_DOWN_INTERVAL)
-
-                    // Check vpn lockdown state every 30 secs
-                    if (
-                        TimeUnit.MILLISECONDS.toSeconds(c) % LOCKDOWN_STATUS_CHECK_TIME_IN_SEC == 0L
-                    ) {
-                        resumeAppIfVpnLockdown()
-                    }
+                    addCountdown(-COUNT_DOWN_INTERVAL)
                 }
             } finally {
-                if (DEBUG) Log.d(LOG_TAG_VPN, "pause timer complete")
+                Logger.d(LOG_TAG_VPN, "pause timer complete")
                 VpnController.resumeApp()
                 setCountdown(INIT_TIME_MS)
             }
         }
-    }
-
-    private fun resumeAppIfVpnLockdown() {
-        // edge-case: there is no call-back for the lockdown mode so using this check, when the
-        // lockdown mode is detected, set the app state as ACTIVE regardless of the current state
-        if (!VpnController.isVpnLockdown()) return
-
-        VpnController.resumeApp()
     }
 
     private fun setCountdown(c: Long): Long {
@@ -100,4 +84,6 @@ object PauseTimer {
     fun getPauseCountDownObserver(): MutableLiveData<Long> {
         return pauseCountDownTimer
     }
+
+    private fun io(f: suspend () -> Unit) = CoroutineScope(Dispatchers.IO).launch { f() }
 }

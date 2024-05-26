@@ -17,8 +17,10 @@ package com.celzero.bravedns.data
 
 import java.io.Serializable
 
+// do not use it as key in the map or set, as it is mutable
 data class ConnTrackerMetaData(
     val uid: Int,
+    val usrId: Int,
     val sourceIP: String,
     val sourcePort: Int,
     val destIP: String,
@@ -26,8 +28,10 @@ data class ConnTrackerMetaData(
     val timestamp: Long,
     var isBlocked: Boolean,
     var blockedByRule: String,
+    var proxyDetails: String,
     var blocklists: String,
     val protocol: Int,
-    var query: String,
-    var connId: String
+    var query: String?,
+    var connId: String,
+    var connType: String
 ) : Serializable

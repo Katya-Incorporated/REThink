@@ -15,6 +15,8 @@
  */
 package com.celzero.bravedns.customdownloader
 
+import Logger
+import Logger.LOG_TAG_DOWNLOAD
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -22,7 +24,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.SystemClock
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
@@ -38,15 +39,12 @@ import com.celzero.bravedns.ui.HomeScreenActivity
 import com.celzero.bravedns.util.Constants
 import com.celzero.bravedns.util.Constants.Companion.INIT_TIME_MS
 import com.celzero.bravedns.util.Constants.Companion.LOCAL_BLOCKLIST_DOWNLOAD_FOLDER_NAME
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_DOWNLOAD
 import com.celzero.bravedns.util.UIUtils
 import com.celzero.bravedns.util.Utilities
 import com.celzero.bravedns.util.Utilities.blocklistDownloadBasePath
+import com.celzero.bravedns.util.Utilities.calculateMd5
+import com.celzero.bravedns.util.Utilities.getTagValueFromJson
 import com.celzero.bravedns.util.Utilities.tempDownloadBasePath
-import dnsx.Dnsx
-import okhttp3.ResponseBody
-import org.koin.core.component.KoinComponent
-import org.koin.core.component.inject
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -54,14 +52,18 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import okhttp3.ResponseBody
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 
 class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParameters) :
     CoroutineWorker(context, workerParams), KoinComponent {
 
     val persistentState by inject<PersistentState>()
     val appConfig by inject<AppConfig>()
-    private var downloadStatuses: MutableMap<Long, DownloadStatus> = hashMapOf()
+    private var downloadStatuses: ConcurrentHashMap<Long, DownloadStatus> = ConcurrentHashMap()
 
     // download request status
     enum class DownloadStatus {
@@ -81,40 +83,46 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
     }
 
     override suspend fun doWork(): Result {
+        Logger.d(LOG_TAG_DOWNLOAD, "Local blocklist download started")
         try {
             val startTime = inputData.getLong("workerStartTime", 0)
             val timestamp = inputData.getLong("blocklistTimestamp", 0)
 
             if (runAttemptCount > 3) {
+                Logger.w(LOG_TAG_DOWNLOAD, "Local blocklist download failed after 3 attempts")
                 return Result.failure()
             }
 
             if (SystemClock.elapsedRealtime() - startTime > BLOCKLIST_DOWNLOAD_TIMEOUT_MS) {
+                Logger.w(LOG_TAG_DOWNLOAD, "Local blocklist download timeout")
                 return Result.failure()
             }
 
             return when (processDownload(timestamp)) {
                 false -> {
                     if (isDownloadCancelled()) {
+                        Logger.i(LOG_TAG_DOWNLOAD, "Local blocklist download cancelled")
                         notifyDownloadCancelled(context)
                     }
+                    Logger.i(LOG_TAG_DOWNLOAD, "Local blocklist download failed")
                     Result.failure()
                 }
                 true -> {
                     // update the download related persistence status on download success
+                    Logger.i(LOG_TAG_DOWNLOAD, "Local blocklist download success, updating ts: $timestamp")
                     updatePersistenceOnCopySuccess(timestamp)
                     Result.success()
                 }
             }
         } catch (ex: CancellationException) {
-            Log.e(
+            Logger.e(
                 LOG_TAG_DOWNLOAD,
                 "Local blocklist download, received cancellation exception: ${ex.message}",
                 ex
             )
             notifyDownloadCancelled(context)
         } catch (ex: Exception) {
-            Log.e(
+            Logger.e(
                 LOG_TAG_DOWNLOAD,
                 "Local blocklist download, received cancellation exception: ${ex.message}",
                 ex
@@ -128,7 +136,12 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
 
     private suspend fun processDownload(timestamp: Long): Boolean {
         // create a temp folder to download, format (timestamp ==> -timestamp)
-        val file = makeTempDownloadDir(timestamp) ?: return false
+        val file = makeTempDownloadDir(timestamp)
+
+        if (file == null) {
+            Logger.e(LOG_TAG_DOWNLOAD, "Error creating temp folder for download")
+            return false
+        }
 
         Constants.ONDEVICE_BLOCKLISTS_IN_APP.forEachIndexed { _, onDeviceBlocklistsMetadata ->
             val id = generateCustomDownloadId()
@@ -136,13 +149,23 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
             downloadStatuses[id] = DownloadStatus.RUNNING
             val filePath = file.absolutePath + onDeviceBlocklistsMetadata.filename
 
-            if (isDownloadCancelled()) return false
+            Logger.i(
+                LOG_TAG_DOWNLOAD,
+                "Downloading file: ${onDeviceBlocklistsMetadata.filename}, url: ${onDeviceBlocklistsMetadata.url}, id: $id"
+            )
+
+            if (isDownloadCancelled()) {
+                Logger.i(LOG_TAG_DOWNLOAD, "Download cancelled, id: $id")
+                return false
+            }
 
             when (startFileDownload(context, onDeviceBlocklistsMetadata.url, filePath)) {
                 true -> {
+                    Logger.i(LOG_TAG_DOWNLOAD, "Download successful for id: $id")
                     downloadStatuses[id] = DownloadStatus.SUCCESSFUL
                 }
                 false -> {
+                    Logger.e(LOG_TAG_DOWNLOAD, "Download failed for id: $id")
                     downloadStatuses[id] = DownloadStatus.FAILED
                     return false
                 }
@@ -151,7 +174,10 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
         // check if all the files are downloaded, as of now the check if for only number of files
         // downloaded. TODO: Later add checksum matching as well
         if (!isDownloadComplete(file)) {
-            Log.e(LOG_TAG_DOWNLOAD, "Local blocklist validation failed for timestamp: $timestamp")
+            Logger.e(
+                LOG_TAG_DOWNLOAD,
+                "Local blocklist validation failed for timestamp: $timestamp"
+            )
             notifyDownloadFailure(context)
             return false
         }
@@ -159,7 +185,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
         if (isDownloadCancelled()) return false
 
         if (!moveLocalBlocklistFiles(context, timestamp)) {
-            Log.e(LOG_TAG_DOWNLOAD, "Issue while moving the downloaded files: $timestamp")
+            Logger.e(LOG_TAG_DOWNLOAD, "Issue while moving the downloaded files: $timestamp")
             notifyDownloadFailure(context)
             return false
         }
@@ -167,7 +193,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
         if (isDownloadCancelled()) return false
 
         if (!isLocalBlocklistDownloadValid(context, timestamp)) {
-            Log.e(LOG_TAG_DOWNLOAD, "Invalid download for local blocklist files: $timestamp")
+            Logger.e(LOG_TAG_DOWNLOAD, "Invalid download for local blocklist files: $timestamp")
             notifyDownloadFailure(context)
             return false
         }
@@ -176,7 +202,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
 
         val result = updateTagsToDb(timestamp)
         if (!result) {
-            Log.e(LOG_TAG_DOWNLOAD, "Invalid download for local blocklist files: $timestamp")
+            Logger.e(LOG_TAG_DOWNLOAD, "Invalid download for local blocklist files: $timestamp")
             notifyDownloadFailure(context)
             return false
         }
@@ -188,7 +214,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
     private fun isDownloadCancelled(): Boolean {
         // return if the download is cancelled by the user
         // sometimes the worker cancellation is not received as exception
-        Log.i(LOG_TAG_DOWNLOAD, "Download cancel check, isStopped? $isStopped")
+        Logger.i(LOG_TAG_DOWNLOAD, "Download cancel check, isStopped? $isStopped")
         return isStopped
     }
 
@@ -207,7 +233,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
             }
             return file
         } catch (ex: IOException) {
-            Log.e(LOG_TAG_DOWNLOAD, "Error creating temp folder $timestamp, ${ex.message}", ex)
+            Logger.e(LOG_TAG_DOWNLOAD, "Error creating temp folder $timestamp, ${ex.message}", ex)
         }
         return null
     }
@@ -215,24 +241,42 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
     private suspend fun startFileDownload(
         context: Context,
         url: String,
-        fileName: String
+        fileName: String,
+        retryCount: Int = 0
     ): Boolean {
         // enable the OkHttp's logging only in debug mode for testing
         if (DEBUG) OkHttpDebugLogging.enableHttp2()
         if (DEBUG) OkHttpDebugLogging.enableTaskRunner()
 
-        // create okhttp client with base url
-        val retrofit =
-            getBlocklistBaseBuilder(RetrofitManager.Companion.OkHttpDnsType.DEFAULT)
-                .build()
-                .create(IBlocklistDownload::class.java)
-        val response = retrofit.downloadLocalBlocklistFile(url, persistentState.appVersion, "")
-
-        return if (response?.isSuccessful == true) {
-            downloadFile(context, response.body(), fileName)
+        try {
+            // create okhttp client with base url
+            val retrofit =
+                getBlocklistBaseBuilder(retryCount).build().create(IBlocklistDownload::class.java)
+            Logger.i(LOG_TAG_DOWNLOAD, "Downloading file: $fileName, url: $url")
+            val response = retrofit.downloadLocalBlocklistFile(url, persistentState.appVersion, "")
+            if (response?.isSuccessful == true) {
+                return downloadFile(context, response.body(), fileName)
+            } else {
+                Logger.e(
+                    LOG_TAG_DOWNLOAD,
+                    "Error in startFileDownload: ${response?.message()}, code: ${response?.code()}"
+                )
+            }
+        } catch (e: Exception) {
+            Logger.e(LOG_TAG_DOWNLOAD, "Error in startFileDownload: ${e.message}", e)
+        }
+        return if (isRetryRequired(retryCount)) {
+            Logger.i(LOG_TAG_DOWNLOAD, "retrying download($url) $fileName, count: $retryCount")
+            startFileDownload(context, url, fileName, retryCount + 1)
         } else {
+            Logger.i(LOG_TAG_DOWNLOAD, "download failed for $fileName, retry: $retryCount")
             false
         }
+    }
+
+    private fun isRetryRequired(retryCount: Int): Boolean {
+        Logger.i(LOG_TAG_DOWNLOAD, "Retry count: $retryCount")
+        return retryCount < RetrofitManager.Companion.OkHttpDnsType.entries.size - 1
     }
 
     private fun downloadFile(context: Context, body: ResponseBody?, fileName: String): Boolean {
@@ -260,7 +304,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
                 val elapsedMs = SystemClock.elapsedRealtime() - startMs
                 downloadedMB += bytesToMB(bytesRead)
                 val progress =
-                    if (contentLength == Long.MAX_VALUE) 0
+                    if (contentLength == Long.MAX_VALUE || expectedMB == 0.0) 0
                     else (downloadedMB * 100 / expectedMB).toInt()
                 if (elapsedMs >= progressJumpsMs) {
                     updateProgress(context, progress)
@@ -271,10 +315,10 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
                 output.write(buf, 0, bytesRead)
             }
             output.flush()
-            Log.i(LOG_TAG_DOWNLOAD, "$fileName > ${downloadedMB}MB downloaded")
+            Logger.i(LOG_TAG_DOWNLOAD, "$fileName > ${downloadedMB}MB downloaded")
             return true
         } catch (e: Exception) {
-            Log.e(LOG_TAG_DOWNLOAD, "$fileName download err: ${e.message}", e)
+            Logger.e(LOG_TAG_DOWNLOAD, "$fileName download err: ${e.message}", e)
         } finally {
             output?.close()
             input?.close()
@@ -290,7 +334,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
         var result = false
         var total: Int? = 0
         try {
-            if (DEBUG) Log.d(LOG_TAG_DOWNLOAD, "Local block list validation: ${dir.absolutePath}")
+            Logger.d(LOG_TAG_DOWNLOAD, "Local block list validation: ${dir.absolutePath}")
 
             total =
                 if (dir.isDirectory) {
@@ -300,14 +344,13 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
                 }
             result = Constants.ONDEVICE_BLOCKLISTS_IN_APP.count() == total
         } catch (e: Exception) {
-            Log.w(LOG_TAG_DOWNLOAD, "Local block list validation failed: ${e.message}", e)
+            Logger.w(LOG_TAG_DOWNLOAD, "Local block list validation failed: ${e.message}", e)
         }
 
-        if (DEBUG)
-            Log.d(
-                LOG_TAG_DOWNLOAD,
-                "Valid on-device blocklist in folder (${dir.name}) download? $result, files: $total, dir? ${dir.isDirectory}"
-            )
+        Logger.d(
+            LOG_TAG_DOWNLOAD,
+            "Valid on-device blocklist in folder (${dir.name}) download? $result, files: $total, dir? ${dir.isDirectory}"
+        )
         return result
     }
 
@@ -318,7 +361,7 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
                 File(tempDownloadBasePath(context, LOCAL_BLOCKLIST_DOWNLOAD_FOLDER_NAME, timestamp))
 
             if (!from.isDirectory) {
-                if (DEBUG) Log.d(LOG_TAG_DOWNLOAD, "Invalid from: ${from.name} dir")
+                Logger.i(LOG_TAG_DOWNLOAD, "Invalid from: ${from.name} dir")
                 return false
             }
 
@@ -338,16 +381,15 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
                 val dest = File(to.absolutePath + File.separator + it.name)
                 val result = it.copyTo(dest, true)
                 if (!result.isFile) {
-                    if (DEBUG)
-                        Log.d(LOG_TAG_DOWNLOAD, "Copy failed from ${it.path} to ${dest.path}")
+                    Logger.d(LOG_TAG_DOWNLOAD, "Copy failed from ${it.path} to ${dest.path}")
                     return false
                 }
             }
 
-            if (DEBUG) Log.d(LOG_TAG_DOWNLOAD, "Copied file from ${from.path} to ${to.path}")
+            Logger.d(LOG_TAG_DOWNLOAD, "Copied file from ${from.path} to ${to.path}")
             return true
         } catch (e: Exception) {
-            Log.e(LOG_TAG_DOWNLOAD, "Error copying files to local blocklist folder", e)
+            Logger.e(LOG_TAG_DOWNLOAD, "err copying files to local blocklist folder", e)
         }
         return false
     }
@@ -356,18 +398,25 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
         try {
             val path: String =
                 blocklistDownloadBasePath(context, LOCAL_BLOCKLIST_DOWNLOAD_FOLDER_NAME, timestamp)
-            val braveDNS =
-                Dnsx.newBraveDNSLocal(
-                    path + Constants.ONDEVICE_BLOCKLIST_FILE_TD,
-                    path + Constants.ONDEVICE_BLOCKLIST_FILE_RD,
-                    path + Constants.ONDEVICE_BLOCKLIST_FILE_BASIC_CONFIG,
-                    path + Constants.ONDEVICE_BLOCKLIST_FILE_TAG
-                )
-            if (DEBUG)
-                Log.d(LOG_TAG_DOWNLOAD, "AppDownloadManager isDownloadValid? ${braveDNS != null}")
-            return braveDNS != null
+            val tdmd5 = calculateMd5(path + Constants.ONDEVICE_BLOCKLIST_FILE_TD)
+            val rdmd5 = calculateMd5(path + Constants.ONDEVICE_BLOCKLIST_FILE_RD)
+            val remoteTdmd5 =
+                getTagValueFromJson(path + Constants.ONDEVICE_BLOCKLIST_FILE_BASIC_CONFIG, "tdmd5")
+            val remoteRdmd5 =
+                getTagValueFromJson(path + Constants.ONDEVICE_BLOCKLIST_FILE_BASIC_CONFIG, "rdmd5")
+            Logger.d(
+                LOG_TAG_DOWNLOAD,
+                "tdmd5: $tdmd5, rdmd5: $rdmd5, remotetd: $remoteTdmd5, remoterd: $remoteRdmd5"
+            )
+            val isDownloadValid = tdmd5 == remoteTdmd5 && rdmd5 == remoteRdmd5
+            Logger.i(LOG_TAG_DOWNLOAD, "AppDownloadManager isDownloadValid? $isDownloadValid")
+            return isDownloadValid
         } catch (e: Exception) {
-            Log.e(LOG_TAG_DOWNLOAD, "AppDownloadManager isDownloadValid exception: ${e.message}", e)
+            Logger.e(
+                LOG_TAG_DOWNLOAD,
+                "AppDownloadManager isDownloadValid exception: ${e.message}",
+                e
+            )
         }
         return false
     }
@@ -512,8 +561,6 @@ class LocalBlocklistCoordinator(val context: Context, workerParams: WorkerParame
     }
 
     private fun updatePersistenceOnCopySuccess(timestamp: Long) {
-        // recreate bravedns object ()
-        appConfig.recreateBraveDnsObj()
         persistentState.localBlocklistTimestamp = timestamp
         persistentState.blocklistEnabled = true
         // reset updatable time stamp

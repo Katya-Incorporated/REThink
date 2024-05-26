@@ -15,26 +15,30 @@
  */
 package com.celzero.bravedns.ui
 
+import Logger
+import Logger.LOG_TAG_APP_UPDATE
+import Logger.LOG_TAG_BACKUP_RESTORE
+import Logger.LOG_TAG_DOWNLOAD
+import Logger.LOG_TAG_UI
 import android.app.UiModeManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.pm.PackageInfo
 import android.content.res.Configuration
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
 import android.net.Uri
 import android.os.Bundle
-import android.util.Log
+import android.os.PersistableBundle
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.navigation.findNavController
+import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.setupWithNavController
-import androidx.preference.PreferenceManager
 import androidx.work.BackoffPolicy
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
@@ -45,7 +49,6 @@ import by.kirich1409.viewbindingdelegate.viewBinding
 import com.celzero.bravedns.BuildConfig
 import com.celzero.bravedns.NonStoreAppUpdater
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.backup.BackupHelper
 import com.celzero.bravedns.backup.BackupHelper.Companion.BACKUP_FILE_EXTN
 import com.celzero.bravedns.backup.BackupHelper.Companion.INTENT_RESTART_APP
@@ -56,43 +59,30 @@ import com.celzero.bravedns.database.RefreshDatabase
 import com.celzero.bravedns.databinding.ActivityHomeScreenBinding
 import com.celzero.bravedns.service.AppUpdater
 import com.celzero.bravedns.service.BraveVPNService
-import com.celzero.bravedns.service.DomainRulesManager
-import com.celzero.bravedns.service.IpRulesManager
 import com.celzero.bravedns.service.PersistentState
 import com.celzero.bravedns.service.RethinkBlocklistManager
 import com.celzero.bravedns.service.VpnController
-import com.celzero.bravedns.service.WireguardManager
+import com.celzero.bravedns.ui.activity.PauseActivity
+import com.celzero.bravedns.ui.activity.WelcomeActivity
 import com.celzero.bravedns.util.Constants
-import com.celzero.bravedns.util.Constants.Companion.INIT_TIME_MS
-import com.celzero.bravedns.util.Constants.Companion.INVALID_PORT
-import com.celzero.bravedns.util.Constants.Companion.LOCAL_BLOCKLIST_DOWNLOAD_FOLDER_NAME
 import com.celzero.bravedns.util.Constants.Companion.PKG_NAME_PLAY_STORE
-import com.celzero.bravedns.util.LoggerConstants
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_APP_UPDATE
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_BACKUP_RESTORE
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_DOWNLOAD
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_UI
 import com.celzero.bravedns.util.RemoteFileTagUtil
 import com.celzero.bravedns.util.Themes.Companion.getCurrentTheme
 import com.celzero.bravedns.util.Utilities
-import com.celzero.bravedns.util.Utilities.blocklistDownloadBasePath
 import com.celzero.bravedns.util.Utilities.getPackageMetadata
 import com.celzero.bravedns.util.Utilities.isPlayStoreFlavour
 import com.celzero.bravedns.util.Utilities.isWebsiteFlavour
-import com.celzero.bravedns.util.Utilities.oldLocalBlocklistDownloadDir
 import com.celzero.bravedns.util.Utilities.showToastUiCentered
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.koin.android.ext.android.get
-import org.koin.android.ext.android.inject
-import java.io.File
 import java.util.Calendar
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import org.koin.android.ext.android.get
+import org.koin.android.ext.android.inject
 
 class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
     private val b by viewBinding(ActivityHomeScreenBinding::bind)
@@ -100,12 +90,19 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
     private val persistentState by inject<PersistentState>()
     private val appConfig by inject<AppConfig>()
     private val appUpdateManager by inject<AppUpdater>()
-    private val refreshDatabase by inject<RefreshDatabase>()
+    private val rdb by inject<RefreshDatabase>()
 
     // support for biometric authentication
     private lateinit var executor: Executor
     private lateinit var biometricPrompt: BiometricPrompt
     private lateinit var promptInfo: BiometricPrompt.PromptInfo
+
+    // private var biometricPromptRetryCount = 1
+    private var onResumeCalledAlready = false
+
+    companion object {
+        private const val ON_RESUME_CALLED_PREFERENCE_KEY = "onResumeCalled"
+    }
 
     // TODO - #324 - Usage of isDarkTheme() in all activities.
     private fun Context.isDarkThemeOn(): Boolean {
@@ -117,9 +114,15 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         setTheme(getCurrentTheme(isDarkThemeOn(), persistentState.theme))
         super.onCreate(savedInstanceState)
 
+        // stackoverflow.com/questions/44221195/multiple-onstop-onresume-calls-in-android-activity
+        // Restore value of members from saved state
+        onResumeCalledAlready =
+            savedInstanceState?.getBoolean(ON_RESUME_CALLED_PREFERENCE_KEY) ?: false
+
         // do not launch on board activity when app is running on TV
         if (persistentState.firstTimeLaunch && !isAppRunningOnTv()) {
             launchOnboardActivity()
+            rdnsRemote()
             return
         }
         updateNewVersion()
@@ -134,9 +137,14 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         observeAppState()
     }
 
+    override fun onSaveInstanceState(outState: Bundle, outPersistentState: PersistableBundle) {
+        outState.putBoolean(ON_RESUME_CALLED_PREFERENCE_KEY, onResumeCalledAlready)
+        super.onSaveInstanceState(outState, outPersistentState)
+    }
+
     override fun onResume() {
         super.onResume()
-        if (persistentState.biometricAuth && !isAppRunningOnTv()) {
+        if (persistentState.biometricAuth && !isAppRunningOnTv() && !onResumeCalledAlready) {
             biometricPrompt()
         }
     }
@@ -152,60 +160,14 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
     }
 
     private fun biometricPrompt() {
-        // return if the biometric authentication is already done within the last 15 minutes
+        // if the biometric authentication is already done in the last 15 minutes, then skip
         // fixme - #324 - move the 15 minutes to a configurable value
         if (
-            persistentState.biometricAuthTime + TimeUnit.MINUTES.toMillis(15) >
-                System.currentTimeMillis()
+            SystemClock.elapsedRealtime() - persistentState.biometricAuthTime <
+                TimeUnit.MINUTES.toMillis(15)
         ) {
-            Log.i(
-                LOG_TAG_UI,
-                "Biometric authentication already done at ${persistentState.biometricAuthTime} , skipping"
-            )
             return
         }
-
-        // ref: https://developer.android.com/training/sign-in/biometric-auth
-        executor = ContextCompat.getMainExecutor(this)
-        biometricPrompt =
-            BiometricPrompt(
-                this,
-                executor,
-                object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                        super.onAuthenticationError(errorCode, errString)
-                        Log.i(
-                            LOG_TAG_UI,
-                            "Biometric authentication error (code: $errorCode): $errString"
-                        )
-                        showToastUiCentered(
-                            applicationContext,
-                            errString.toString(),
-                            Toast.LENGTH_SHORT
-                        )
-                        finish()
-                    }
-
-                    override fun onAuthenticationSucceeded(
-                        result: BiometricPrompt.AuthenticationResult
-                    ) {
-                        super.onAuthenticationSucceeded(result)
-                        persistentState.biometricAuthTime = System.currentTimeMillis()
-                        Log.i(LOG_TAG_UI, "Biometric authentication succeeded")
-                    }
-
-                    override fun onAuthenticationFailed() {
-                        super.onAuthenticationFailed()
-                        showToastUiCentered(
-                            applicationContext,
-                            getString(R.string.hs_biometeric_failed),
-                            Toast.LENGTH_SHORT
-                        )
-                        Log.i(LOG_TAG_UI, "Biometric authentication failed")
-                        biometricPrompt.authenticate(promptInfo)
-                    }
-                }
-            )
 
         promptInfo =
             BiometricPrompt.PromptInfo.Builder()
@@ -218,12 +180,79 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
                 .setConfirmationRequired(false)
                 .build()
 
+        // ref: https://developer.android.com/training/sign-in/biometric-auth
+        executor = ContextCompat.getMainExecutor(this)
+        biometricPrompt =
+            BiometricPrompt(
+                this,
+                executor,
+                object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                        super.onAuthenticationError(errorCode, errString)
+                        Logger.i(
+                            LOG_TAG_UI,
+                            "Biometric authentication error (code: $errorCode): $errString"
+                        )
+                        // error code 5 (ERROR_CANCELED), this may happen when the device is locked
+                        // or another pending operation prevents or disables it
+                        // error code 10 (ERROR_USER_CANCELED), retry once after user cancelled
+                        // the biometric prompt. ref issuetracker.google.com/issues/145231213
+                        // commenting the code below, as the retry is buggy and not working as
+                        // expected, have to revisit this code later
+                        /* if (
+                            biometricPromptRetryCount > 0 &&
+                                (errorCode == BiometricPrompt.ERROR_CANCELED ||
+                                    errorCode == BiometricPrompt.ERROR_USER_CANCELED)
+                        ) {
+                            biometricPromptRetryCount--
+                            if (isInForeground()) biometricPrompt.authenticate(promptInfo)
+                        } else {
+                            showToastUiCentered(
+                                applicationContext,
+                                errString.toString(),
+                                Toast.LENGTH_SHORT
+                            )
+                            finish()
+                        } */
+                        showToastUiCentered(
+                            this@HomeScreenActivity,
+                            errString.toString(),
+                            Toast.LENGTH_SHORT
+                        )
+                        finish()
+                    }
+
+                    override fun onAuthenticationSucceeded(
+                        result: BiometricPrompt.AuthenticationResult
+                    ) {
+                        super.onAuthenticationSucceeded(result)
+                        // biometricPromptRetryCount = 1
+                        persistentState.biometricAuthTime = SystemClock.elapsedRealtime()
+                        Logger.i(LOG_TAG_UI, "Biometric success @ ${System.currentTimeMillis()}")
+                    }
+
+                    override fun onAuthenticationFailed() {
+                        super.onAuthenticationFailed()
+                        showToastUiCentered(
+                            this@HomeScreenActivity,
+                            getString(R.string.hs_biometeric_failed),
+                            Toast.LENGTH_SHORT
+                        )
+                        Logger.i(LOG_TAG_UI, "Biometric authentication failed")
+                        // show the biometric prompt again only if the ui is in foreground
+                        if (isInForeground()) biometricPrompt.authenticate(promptInfo)
+                    }
+                }
+            )
+
         // BIOMETRIC_WEAK :Any biometric (e.g. fingerprint, iris, or face) on the device that meets
         // or exceeds the requirements for Class 2(formerly Weak), as defined by the Android CDD.
         if (
             BiometricManager.from(this)
-                .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
-                BiometricManager.BIOMETRIC_SUCCESS
+                .canAuthenticate(
+                    BiometricManager.Authenticators.BIOMETRIC_WEAK or
+                        BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                ) == BiometricManager.BIOMETRIC_SUCCESS
         ) {
             biometricPrompt.authenticate(promptInfo)
         } else {
@@ -233,6 +262,10 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
                 Toast.LENGTH_SHORT
             )
         }
+    }
+
+    private fun isInForeground(): Boolean {
+        return !this.isFinishing && !this.isDestroyed
     }
 
     private fun handleIntent() {
@@ -249,13 +282,8 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
                 Toast.LENGTH_SHORT
             )
         } else if (intent.getBooleanExtra(INTENT_RESTART_APP, false)) {
-            Log.i(LOG_TAG_UI, "Restart from restore, so refreshing app database...")
-            io {
-                refreshDatabase.refreshAppInfoDatabase()
-                IpRulesManager.loadIpRules()
-                DomainRulesManager.load()
-                WireguardManager.restoreProcessDeleteWireGuardEntries()
-            }
+            Logger.i(LOG_TAG_UI, "Restart from restore, so refreshing app database...")
+            io { rdb.refresh(RefreshDatabase.ACTION_REFRESH_RESTORE) }
         }
     }
 
@@ -273,6 +301,8 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
     }
 
     private fun showRestoreDialog(uri: Uri) {
+        if (!isInForeground()) return
+
         val builder = MaterialAlertDialogBuilder(this)
         builder.setTitle(R.string.brbs_restore_dialog_title)
         builder.setMessage(R.string.brbs_restore_dialog_message)
@@ -290,7 +320,7 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
     }
 
     private fun startRestore(fileUri: Uri) {
-        Log.i(LOG_TAG_BACKUP_RESTORE, "invoke worker to initiate the restore process")
+        Logger.i(LOG_TAG_BACKUP_RESTORE, "invoke worker to initiate the restore process")
         val data = Data.Builder()
         data.putString(BackupHelper.DATA_BUILDER_RESTORE_URI, fileUri.toString())
 
@@ -313,7 +343,7 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         // observer for custom download manager worker
         workManager.getWorkInfosByTagLiveData(RestoreAgent.TAG).observe(this) { workInfoList ->
             val workInfo = workInfoList?.getOrNull(0) ?: return@observe
-            Log.i(
+            Logger.i(
                 LOG_TAG_BACKUP_RESTORE,
                 "WorkManager state: ${workInfo.state} for ${RestoreAgent.TAG}"
             )
@@ -351,67 +381,30 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
     }
 
     private fun removeThisMethod() {
-        // for version v055
-        updateHttpProxyForV55()
-
-        // for version v03k
-        removeKeyFromSharedPref()
-        changeDefaultToMax()
-
-        // for version v054
-        updateIfRethinkConnectedv053x()
+        // change the persistent state for defaultDnsUrl, if its google.com (only for v055d)
+        // fixme: remove this post v054.
+        // this is to fix the default dns url, as the default dns url is changed from
+        // dns.google.com to dns.google. In servers.xml default ips available for dns.google
+        // so changing the default dns url to dns.google
+        if (persistentState.defaultDnsUrl.contains("dns.google.com")) {
+            persistentState.defaultDnsUrl = Constants.DEFAULT_DNS_LIST[2].url
+        }
         moveRemoteBlocklistFileFromAsset()
+        // reset the bio metric auth time, as now the value is changed from System.currentTimeMillis
+        // to SystemClock.elapsedRealtime
+        persistentState.biometricAuthTime = SystemClock.elapsedRealtime()
+    }
 
+    private fun rdnsRemote() {
+        // enforce the dns to sky for play store build, and max for website and f-droid build
+        // on first time launch
         io {
-            moveLocalBlocklistFiles()
-
-            // path: /data/data/com.celzero.bravedns/files
-            val oldFolder = File(this.filesDir.canonicalPath)
-            deleteUnwantedFolders(oldFolder)
-
-            // already there is a local blocklist file available, complete the initial filetag read
-            if (persistentState.localBlocklistTimestamp != INIT_TIME_MS) {
-                RethinkBlocklistManager.readJson(
-                    this,
-                    RethinkBlocklistManager.DownloadType.LOCAL,
-                    persistentState.localBlocklistTimestamp
-                )
+            if (isPlayStoreFlavour()) {
+                appConfig.switchRethinkDnsToSky()
+            } else {
+                appConfig.switchRethinkDnsToMax()
             }
         }
-    }
-
-    private fun updateHttpProxyForV55() {
-        // for version v055
-        val port = persistentState.httpProxyPort
-        // no need to perform below changes if the port / host is not set
-        if (port == INVALID_PORT || persistentState.httpProxyHostAddress.isEmpty()) return
-
-        val ip = persistentState.httpProxyHostAddress
-        val host = "http://$ip:$port/"
-        persistentState.httpProxyHostAddress = host
-    }
-
-    private fun changeDefaultToMax() {
-        // only change the rethink dns to max for website and f-droid build
-        if (isPlayStoreFlavour()) return
-
-        io { appConfig.switchRethinkDnsToMax() }
-    }
-
-    private fun removeKeyFromSharedPref() {
-        // below keys are not used, remove from shared pref
-        val removeLocal = "local_blocklist_update_check"
-        val removeRemote = "remote_blocklist_update_check"
-        val killApp = "kill_app_on_firewall"
-        val dnsCryptRelay = "dnscrypt_relay"
-
-        val sharedPref: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(this)
-        val editor = sharedPref.edit()
-        editor.remove(removeLocal)
-        editor.remove(removeRemote)
-        editor.remove(killApp)
-        editor.remove(dnsCryptRelay)
-        editor.apply()
     }
 
     // fixme: find a cleaner way to implement this, move this to some other place
@@ -434,60 +427,6 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         }
     }
 
-    private fun updateIfRethinkConnectedv053x() {
-        if (!appConfig.isRethinkDnsConnectedv053x()) return
-
-        io {
-            appConfig.updateRethinkPlusCountv053x(persistentState.getRemoteBlocklistCount())
-            persistentState.dnsType = AppConfig.DnsType.RETHINK_REMOTE.type
-            appConfig.enableRethinkDnsPlus()
-        }
-    }
-
-    private fun moveLocalBlocklistFiles() {
-        val path = oldLocalBlocklistDownloadDir(this, persistentState.localBlocklistTimestamp)
-        val blocklistsExist =
-            Constants.ONDEVICE_BLOCKLISTS_ADM.all {
-                File(path + File.separator + it.filename).exists()
-            }
-        if (!blocklistsExist) return
-
-        changeDefaultLocalBlocklistLocation()
-    }
-
-    // move the files of local blocklist to specific folder (../files/local_blocklist/<timestamp>)
-    private fun changeDefaultLocalBlocklistLocation() {
-        val baseDir =
-            blocklistDownloadBasePath(
-                this,
-                LOCAL_BLOCKLIST_DOWNLOAD_FOLDER_NAME,
-                persistentState.localBlocklistTimestamp
-            )
-        File(baseDir).mkdirs()
-        Constants.ONDEVICE_BLOCKLISTS_ADM.forEach {
-            val currentFile =
-                File(
-                    oldLocalBlocklistDownloadDir(this, persistentState.localBlocklistTimestamp) +
-                        it.filename
-                )
-            val newFile = File(baseDir + File.separator + it.filename)
-            com.google.common.io.Files.move(currentFile, newFile)
-        }
-    }
-
-    private fun deleteUnwantedFolders(fileOrDirectory: File) {
-        // TODO: delete the old folders with timestamp in the files dir (../files/<timestamp>)
-        // this operation is performed after moving the local blocklist to
-        // specific folder
-
-        if (fileOrDirectory.name.startsWith("16")) {
-            if (fileOrDirectory.isDirectory) {
-                fileOrDirectory.listFiles()?.forEach { child -> deleteUnwantedFolders(child) }
-            }
-            fileOrDirectory.delete()
-        }
-    }
-
     private fun launchOnboardActivity() {
         val intent = Intent(this, WelcomeActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
@@ -499,7 +438,7 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         if (!isNewVersion()) return
 
         val version = getLatestVersion()
-        Log.i(LOG_TAG_UI, "New version detected, updating the app version, version: $version")
+        Logger.i(LOG_TAG_UI, "New version detected, updating the app version, version: $version")
         persistentState.appVersion = version
         persistentState.showWhatsNewChip = true
 
@@ -526,7 +465,7 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         val diff = System.currentTimeMillis() - persistentState.lastAppUpdateCheck
 
         val daysElapsed = TimeUnit.MILLISECONDS.toDays(diff)
-        Log.i(LOG_TAG_UI, "App update check initiated, number of days: $daysElapsed")
+        Logger.i(LOG_TAG_UI, "App update check initiated, number of days: $daysElapsed")
         if (daysElapsed <= 1L) return
 
         checkForUpdate()
@@ -547,27 +486,44 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
 
         // Check updates only for play store / website version. Not fDroid.
         if (!isPlayStoreFlavour() && !isWebsiteFlavour()) {
-            if (DEBUG)
-                Log.d(
-                    LOG_TAG_APP_UPDATE,
-                    "Check for update: Not play or website- ${BuildConfig.FLAVOR}"
-                )
+            Logger.d(
+                LOG_TAG_APP_UPDATE,
+                "Check for update: Not play or website- ${BuildConfig.FLAVOR}"
+            )
             return
         }
 
         if (isGooglePlayServicesAvailable() && isPlayStoreFlavour()) {
-            appUpdateManager.checkForAppUpdate(
-                isInteractive,
-                this,
-                installStateUpdatedListener
-            ) // Might be play updater or web updater
-        } else {
-            get<NonStoreAppUpdater>()
-                .checkForAppUpdate(
+            try {
+                appUpdateManager.checkForAppUpdate(
                     isInteractive,
                     this,
                     installStateUpdatedListener
-                ) // Always web updater
+                ) // Might be play updater or web updater
+            } catch (e: Exception) {
+                Logger.e(LOG_TAG_APP_UPDATE, "err in app update check: ${e.message}", e)
+                showDownloadDialog(
+                    AppUpdater.InstallSource.STORE,
+                    getString(R.string.download_update_dialog_failure_title),
+                    getString(R.string.download_update_dialog_failure_message)
+                )
+            }
+        } else {
+            try {
+                get<NonStoreAppUpdater>()
+                    .checkForAppUpdate(
+                        isInteractive,
+                        this,
+                        installStateUpdatedListener
+                    ) // Always web updater
+            } catch (e: Exception) {
+                Logger.e(LOG_TAG_APP_UPDATE, "Error in app (web) update check: ${e.message}", e)
+                showDownloadDialog(
+                    AppUpdater.InstallSource.OTHER,
+                    getString(R.string.download_update_dialog_failure_title),
+                    getString(R.string.download_update_dialog_failure_message)
+                )
+            }
         }
     }
 
@@ -583,7 +539,7 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
     private val installStateUpdatedListener =
         object : AppUpdater.InstallStateListener {
             override fun onStateUpdate(state: AppUpdater.InstallState) {
-                Log.i(LOG_TAG_UI, "InstallStateUpdatedListener: state: " + state.status)
+                Logger.i(LOG_TAG_UI, "InstallStateUpdatedListener: state: " + state.status)
                 when (state.status) {
                     AppUpdater.InstallStatus.DOWNLOADED -> {
                         // CHECK THIS if AppUpdateType.FLEXIBLE, otherwise you can skip
@@ -665,6 +621,8 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         title: String,
         message: String
     ) {
+        if (!isInForeground()) return
+
         val builder = MaterialAlertDialogBuilder(this)
         builder.setTitle(title)
         builder.setMessage(message)
@@ -717,11 +675,7 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
             startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             showToastUiCentered(this, getString(R.string.no_browser_error), Toast.LENGTH_SHORT)
-            Log.w(
-                LoggerConstants.LOG_TAG_VPN,
-                "Failure opening rethink download link: ${e.message}",
-                e
-            )
+            Logger.w(Logger.LOG_TAG_VPN, "Failure opening rethink download link: ${e.message}", e)
         }
     }
 
@@ -730,17 +684,19 @@ class HomeScreenActivity : AppCompatActivity(R.layout.activity_home_screen) {
         try {
             appUpdateManager.unregisterListener(installStateUpdatedListener)
         } catch (e: IllegalArgumentException) {
-            Log.w(LOG_TAG_DOWNLOAD, "Unregister receiver exception")
+            Logger.w(LOG_TAG_DOWNLOAD, "Unregister receiver exception")
         }
     }
 
     private fun setupNavigationItemSelectedListener() {
-        val navController = this.findNavController(R.id.fragment_container)
+        val navHostFragment =
+            supportFragmentManager.findFragmentById(R.id.fragment_container) as NavHostFragment
+        val navController = navHostFragment.navController
         val btmNavView = findViewById<BottomNavigationView>(R.id.nav_view)
         btmNavView.setupWithNavController(navController)
     }
 
     private fun io(f: suspend () -> Unit) {
-        lifecycleScope.launch { withContext(Dispatchers.IO) { f() } }
+        lifecycleScope.launch(Dispatchers.IO) { f() }
     }
 }

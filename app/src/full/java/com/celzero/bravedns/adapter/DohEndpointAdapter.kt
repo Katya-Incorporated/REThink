@@ -16,39 +16,43 @@ limitations under the License.
 
 package com.celzero.bravedns.adapter
 
+import Logger
+import Logger.LOG_TAG_DNS
 import android.content.Context
 import android.content.DialogInterface
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.paging.PagingDataAdapter
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+import backend.Backend
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.data.AppConfig
 import com.celzero.bravedns.database.DoHEndpoint
-import com.celzero.bravedns.databinding.DohEndpointListItemBinding
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_DNS
+import com.celzero.bravedns.databinding.ListItemEndpointBinding
+import com.celzero.bravedns.service.VpnController
 import com.celzero.bravedns.util.UIUtils.clipboardCopy
-import com.celzero.bravedns.util.UIUtils.getDnsStatus
+import com.celzero.bravedns.util.UIUtils.getDnsStatusStringRes
 import com.celzero.bravedns.util.Utilities
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class DohEndpointAdapter(
-    private val context: Context,
-    private val lifecycleOwner: LifecycleOwner,
-    private val appConfig: AppConfig
-) : PagingDataAdapter<DoHEndpoint, DohEndpointAdapter.DoHEndpointViewHolder>(DIFF_CALLBACK) {
+class DohEndpointAdapter(private val context: Context, private val appConfig: AppConfig) :
+    PagingDataAdapter<DoHEndpoint, DohEndpointAdapter.DoHEndpointViewHolder>(DIFF_CALLBACK) {
+
+    var lifecycleOwner: LifecycleOwner? = null
 
     companion object {
+        private const val ONE_SEC = 1000L
         private val DIFF_CALLBACK =
             object : DiffUtil.ItemCallback<DoHEndpoint>() {
                 override fun areItemsTheSame(
@@ -71,7 +75,8 @@ class DohEndpointAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): DoHEndpointViewHolder {
         val itemBinding =
-            DohEndpointListItemBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+            ListItemEndpointBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+        lifecycleOwner = parent.findViewTreeLifecycleOwner()
         return DoHEndpointViewHolder(itemBinding)
     }
 
@@ -80,8 +85,9 @@ class DohEndpointAdapter(
         holder.update(doHEndpoint)
     }
 
-    inner class DoHEndpointViewHolder(private val b: DohEndpointListItemBinding) :
+    inner class DoHEndpointViewHolder(private val b: ListItemEndpointBinding) :
         RecyclerView.ViewHolder(b.root) {
+        private var statusCheckJob: Job? = null
 
         fun update(endpoint: DoHEndpoint) {
             displayDetails(endpoint)
@@ -90,56 +96,79 @@ class DohEndpointAdapter(
 
         private fun setupClickListeners(endpoint: DoHEndpoint) {
             b.root.setOnClickListener { updateConnection(endpoint) }
-            b.dohEndpointListActionImage.setOnClickListener {
-                showExplanationOnImageClick(endpoint)
-            }
-            b.dohEndpointListCheckImage.setOnClickListener { updateConnection(endpoint) }
+            b.endpointInfoImg.setOnClickListener { showExplanationOnImageClick(endpoint) }
+            b.endpointCheck.setOnClickListener { updateConnection(endpoint) }
         }
 
         private fun displayDetails(endpoint: DoHEndpoint) {
             if (endpoint.isSecure) {
-                b.dohEndpointListUrlName.text = endpoint.dohName
+                b.endpointName.text = endpoint.dohName
             } else {
-                b.dohEndpointListUrlName.text =
+                b.endpointName.text =
                     context.getString(
                         R.string.ci_desc,
                         endpoint.dohName,
                         context.getString(R.string.lbl_insecure)
                     )
             }
-            b.dohEndpointListUrlExplanation.text = ""
-            b.dohEndpointListCheckImage.isChecked = endpoint.isSelected
-            Log.i(
-                LOG_TAG_DNS,
-                "connected to doh: ${endpoint.dohName} isSelected? ${endpoint.isSelected}"
-            )
-            if (endpoint.isSelected) {
-                b.dohEndpointListUrlExplanation.text =
-                    context.getString(getDnsStatus()).replaceFirstChar(Char::titlecase)
+            b.endpointCheck.isChecked = endpoint.isSelected
+            if (endpoint.isSelected && VpnController.hasTunnel()) {
+                keepSelectedStatusUpdated()
+            } else if (endpoint.isSelected) {
+                b.endpointDesc.text = context.getString(R.string.rt_filter_parent_selected)
+            } else {
+                b.endpointDesc.text = ""
             }
 
             // Shows either the info/delete icon for the DoH entries.
             showIcon(endpoint)
         }
 
+        private fun keepSelectedStatusUpdated() {
+            statusCheckJob = ui {
+                while (true) {
+                    updateSelectedStatus()
+                    delay(ONE_SEC)
+                }
+            }
+        }
+
+        private fun updateSelectedStatus() {
+            // if the view is not active then cancel the job
+            if (
+                lifecycleOwner
+                    ?.lifecycle
+                    ?.currentState
+                    ?.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) == false ||
+                    bindingAdapterPosition == RecyclerView.NO_POSITION
+            ) {
+                statusCheckJob?.cancel()
+                return
+            }
+
+            // always use the id as Dnsx.Preffered as it is the primary dns id for now
+            val state = VpnController.getDnsStatus(Backend.Preferred)
+            val status = getDnsStatusStringRes(state)
+            b.endpointDesc.text = context.getString(status).replaceFirstChar(Char::titlecase)
+        }
+
         private fun showIcon(endpoint: DoHEndpoint) {
             if (endpoint.isDeletable()) {
-                b.dohEndpointListActionImage.setImageDrawable(
+                b.endpointInfoImg.setImageDrawable(
                     ContextCompat.getDrawable(context, R.drawable.ic_fab_uninstall)
                 )
             } else {
-                b.dohEndpointListActionImage.setImageDrawable(
+                b.endpointInfoImg.setImageDrawable(
                     ContextCompat.getDrawable(context, R.drawable.ic_info)
                 )
             }
         }
 
         private fun updateConnection(endpoint: DoHEndpoint) {
-            if (DEBUG)
-                Log.d(
-                    LOG_TAG_DNS,
-                    "on doh change - ${endpoint.dohName}, ${endpoint.dohURL}, ${endpoint.isSelected}"
-                )
+            Logger.d(
+                LOG_TAG_DNS,
+                "on doh change - ${endpoint.dohName}, ${endpoint.dohURL}, ${endpoint.isSelected}"
+            )
             io {
                 endpoint.isSelected = true
                 appConfig.handleDoHChanges(endpoint)
@@ -150,12 +179,11 @@ class DohEndpointAdapter(
             io {
                 appConfig.deleteDohEndpoint(id)
                 uiCtx {
-                    Toast.makeText(
-                            context,
-                            R.string.doh_custom_url_remove_success,
-                            Toast.LENGTH_SHORT
-                        )
-                        .show()
+                    Utilities.showToastUiCentered(
+                        context,
+                        context.getString(R.string.doh_custom_url_remove_success),
+                        Toast.LENGTH_SHORT
+                    )
                 }
             }
         }
@@ -224,8 +252,12 @@ class DohEndpointAdapter(
             withContext(Dispatchers.Main) { f() }
         }
 
+        private fun ui(f: suspend () -> Unit): Job? {
+            return lifecycleOwner?.lifecycleScope?.launch { withContext(Dispatchers.Main) { f() } }
+        }
+
         private fun io(f: suspend () -> Unit) {
-            lifecycleOwner.lifecycleScope.launch { withContext(Dispatchers.IO) { f() } }
+            lifecycleOwner?.lifecycleScope?.launch { withContext(Dispatchers.IO) { f() } }
         }
     }
 }

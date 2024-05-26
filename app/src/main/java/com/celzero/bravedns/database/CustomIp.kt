@@ -15,13 +15,11 @@
  */
 package com.celzero.bravedns.database
 
-import android.util.Log
 import androidx.room.Entity
 import com.celzero.bravedns.util.Constants.Companion.INIT_TIME_MS
 import com.celzero.bravedns.util.Constants.Companion.UID_EVERYBODY
 import com.celzero.bravedns.util.Constants.Companion.UNSPECIFIED_PORT
-import com.celzero.bravedns.util.LoggerConstants
-import inet.ipaddr.HostName
+import inet.ipaddr.IPAddress
 import inet.ipaddr.IPAddressString
 
 /**
@@ -50,8 +48,7 @@ class CustomIp {
 
     override fun equals(other: Any?): Boolean {
         if (other !is CustomIp) return false
-        if (ipAddress != other.ipAddress && uid != other.uid) return false
-        return true
+        return !(ipAddress != other.ipAddress && uid != other.uid)
     }
 
     override fun hashCode(): Int {
@@ -60,49 +57,9 @@ class CustomIp {
         return result
     }
 
-    fun getCustomIpAddress(): HostName {
-        return if (port == UNSPECIFIED_PORT) {
-            HostName(ipAddress)
-        } else {
-            HostName(IPAddressString(ipAddress).address, port)
-        }
-    }
-
-    // chances of null pointer exception while converting the string object to
-    // HostName().address
-    // ref: https://seancfoley.github.io/IPAddress/
-    fun setCustomIpAddress(ipAddress: String) {
-        var ip = ipAddress
-        try {
-            if (HostName(ipAddress).asAddress().isIPv4) {
-                if (ipAddress.count { it == '.' } < 3) {
-                    ip = getPaddedIp(ip)
-                }
-            }
-            this.ipAddress = HostName(ip).asAddress().toNormalizedString()
-        } catch (ignored: NullPointerException) {
-            Log.e(LoggerConstants.LOG_TAG_VPN, "Invalid IP address added", ignored)
-            this.ipAddress = ""
-        }
-    }
-
-    fun setCustomIpAddress(hostName: HostName) {
-        try {
-            this.ipAddress = hostName.asAddress().toNormalizedString()
-            val y = hostName.asAddress().assignPrefixForSingleBlock().toString()
-            val x = hostName.port
-        } catch (ignored: NullPointerException) {
-            Log.e(LoggerConstants.LOG_TAG_VPN, "Invalid IP address added", ignored)
-            this.ipAddress = ""
-        }
-    }
-
-    private fun getPaddedIp(ip: String): String {
-        return if (ip.contains("/")) {
-            val index = ip.indexOf("/")
-            ip.substring(0, index) + ".*" + ip.substring(index)
-        } else {
-            "$ip.*"
-        }
+    fun getCustomIpAddress(): Pair<IPAddress, Int> {
+        val ip = IPAddressString(ipAddress).address
+        val port = port
+        return Pair(ip, port)
     }
 }

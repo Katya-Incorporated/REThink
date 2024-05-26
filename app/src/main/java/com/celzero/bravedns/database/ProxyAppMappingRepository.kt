@@ -19,24 +19,28 @@ class ProxyAppMappingRepository(
     private val proxyApplicationMappingDAO: ProxyApplicationMappingDAO
 ) {
 
-    suspend fun update(wgMapping: ProxyApplicationMapping) {
-        proxyApplicationMappingDAO.update(wgMapping)
+    suspend fun update(pam: ProxyApplicationMapping) {
+        proxyApplicationMappingDAO.update(pam)
     }
 
-    suspend fun insert(wgMapping: ProxyApplicationMapping): Long {
-        return proxyApplicationMappingDAO.insert(wgMapping)
+    suspend fun insert(pam: ProxyApplicationMapping): Long {
+        return proxyApplicationMappingDAO.insert(pam)
     }
 
-    suspend fun insertAll(wgMapping: List<ProxyApplicationMapping>): LongArray {
-        return proxyApplicationMappingDAO.insertAll(wgMapping)
+    suspend fun insertAll(pams: List<ProxyApplicationMapping>): LongArray {
+        return proxyApplicationMappingDAO.insertAll(pams)
     }
 
-    suspend fun delete(wgMapping: ProxyApplicationMapping) {
-        proxyApplicationMappingDAO.deleteByPackageName(wgMapping.uid, wgMapping.packageName)
+    suspend fun deleteApp(pam: ProxyApplicationMapping) {
+        proxyApplicationMappingDAO.deleteApp(pam.uid, pam.packageName)
+    }
+
+    suspend fun deleteAll() {
+        proxyApplicationMappingDAO.deleteAll()
     }
 
     suspend fun getApps(): List<ProxyApplicationMapping> {
-        return proxyApplicationMappingDAO.getWgAppMapping()
+        return proxyApplicationMappingDAO.getWgAppMapping() ?: emptyList()
     }
 
     suspend fun updateProxyIdForApp(uid: Int, proxyId: String, proxyName: String) {
@@ -53,5 +57,13 @@ class ProxyAppMappingRepository(
 
     suspend fun updateProxyForAllApps(proxyId: String, proxyName: String) {
         proxyApplicationMappingDAO.updateProxyForAllApps(proxyId, proxyName)
+    }
+
+    suspend fun updateProxyNameForProxyId(proxyId: String, proxyName: String) {
+        proxyApplicationMappingDAO.updateProxyNameForProxyId(proxyId, proxyName)
+    }
+
+    suspend fun updateProxyForUnselectedApps(proxyId: String, proxyName: String) {
+        return proxyApplicationMappingDAO.updateProxyForUnselectedApps(proxyId, proxyName)
     }
 }

@@ -92,7 +92,6 @@
     <string name="settings_vpn_heading">vpn</string>
     <string name="settings_enable_logs">Įgalinti registravimą įrenginyje</string>
     <string name="app_mode_choose">Pasirinkti režimą</string>
-    <string name="whats_dialog_title">Kas naujo v053l</string>
     <string name="connection_http3">HTTP3</string>
     <string name="settings_ip_network_heading">Pasirinkti IP versiją</string>
     <string name="settings_ip_network_desc">Pasirinkti vieną iš interneto protokolo versijų.</string>
@@ -198,7 +197,6 @@
     <string name="hsf_blocklist_updating_text">Įgalinama…</string>
     <string name="hsf_chip_appearance">Tema: %1$s</string>
     <string name="hsf_pause_vpn_failure">Nepavyksta pristabdyti: RethinkDNS neaktyvus</string>
-    <string name="hsf_pause_lockdown_failure">Negalima pristabdyti: RethinkDNS veikia visiško užrakinimo režimu</string>
     <string name="dc_block_heading">taisyklės</string>
     <string name="dc_other_dns_heading">tipas</string>
     <string name="dc_custom_dns_radio">Kitas DNS</string>
@@ -433,7 +431,6 @@
     <string name="status_protected" description="This is a large message in a reassuring color.  It indicates that DNS queries can't be surveilled or modified in transit.">apsaugota</string>
     <string name="status_exposed" description="This is a large message in a scary color.  It indicates that DNS queries can be surveilled or modified in transit.">neapsaugota</string>
     <string name="dns_explanation_connected" description="The message will be shown when the DNS is connected">Prisijungta prie RethinkDNS ir ugniasienės</string>
-    <string name="rethink_plus">RethinkDNS Plus</string>
     <string name="status_strict" description="This is similar to dns_on, but the protection is being provided by the operating system, not by Rethink.  It is not color-highlighted.">įjungtas privatus dns</string>
     <string name="block">blokuoti</string>
     <string name="pause_mode_notification_title">Pristabdyta! Užblokuotoms programėlėms ir toliau bus taikoma ugniasienė.</string>
@@ -588,7 +585,6 @@
     <string name="univ_firewall_rule_1">Blokuoti visas programėles, kai įrenginys užrakintas</string>
     <string name="hs_download_positive_default">gerai</string>
     <string name="fapps_metered_unblock_dialog_message">Leisti prisijungimus matuojamame (mobiliajame) tinkle <i>išvardytoms</i> programėlėms\?</string>
-    <string name="fapps_lockdown_hint">VPN veikia visiško užrakinimo režimu. Ugniasienė nesilaikys matuojamų / nematuojamų tinklų taisyklių.</string>
     <string name="univ_delete_firewall_dialog_message">Ištrynus šias taisykles, bet kuri programėlė galėtų prisijungti prie šiuo metu užblokuotų IP adresų.</string>
     <string name="dns_connected_rethink_plus">Prisijungta. Naudojami %1$s blokavimo sąrašai</string>
     <string name="dns_crypt_relay_error_toast">Nepasirinktas joks sprendiklis</string>

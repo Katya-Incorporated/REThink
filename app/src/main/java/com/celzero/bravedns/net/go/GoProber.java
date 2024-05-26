@@ -21,18 +21,13 @@ import android.content.Context;
 
 import com.celzero.bravedns.net.doh.Prober;
 
-import dnsx.Summary;
-import dnsx.Transport;
-import intra.Intra;
-
 /**
  * Implements a Probe using the Go-based DoH client.
  */
 public class GoProber extends Prober {
 
-    private final Context context;
-
     private static final String PROBER_TAG = "Prober";
+    private final Context context;
 
     public GoProber(Context context) {
         this.context = context;
@@ -40,15 +35,17 @@ public class GoProber extends Prober {
 
     @Override
     public void probe(String url, Callback callback) {
-        new Thread(() -> {
+        // no-op
+        // query()
+        /*new Thread(() -> {
             String dohIPs = GoVpnAdapter.Companion.getIpString(context, url);
             try {
-                Transport transport = Intra.newDoHTransport(PROBER_TAG, url, dohIPs);
+                backend.DNSTransport transport = null; //Intra.newDoHTransport(PROBER_TAG, url, dohIPs);
                 if (transport == null) {
                     callback.onCompleted(false);
                     return;
                 }
-                final Summary summary = new dnsx.Summary();
+                final DNSSummary summary = new backend.DNSSummary();
                 byte[] response = transport.query("", QUERY_DATA, summary);
                 if (response != null && response.length > 0) {
                     callback.onCompleted(true);
@@ -58,6 +55,6 @@ public class GoProber extends Prober {
             } catch (Exception e) {
                 callback.onCompleted(false);
             }
-        }, "GoProber-probe").start();
+        }, "GoProber-probe").start();*/
     }
 }

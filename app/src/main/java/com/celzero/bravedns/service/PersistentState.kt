@@ -19,6 +19,7 @@ import android.content.Context
 import androidx.lifecycle.MutableLiveData
 import com.celzero.bravedns.R
 import com.celzero.bravedns.data.AppConfig
+import com.celzero.bravedns.database.DnsCryptRelayEndpoint
 import com.celzero.bravedns.util.Constants.Companion.INIT_TIME_MS
 import com.celzero.bravedns.util.Constants.Companion.INVALID_PORT
 import com.celzero.bravedns.util.InternetProtocol
@@ -44,17 +45,19 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
         const val NETWORK = "add_all_networks_to_vpn"
         const val NOTIFICATION_ACTION = "notification_action"
         const val DNS_CHANGE = "connected_dns_name"
-        const val DNS_RELAYS = "dnscrypt_relay"
         const val INTERNET_PROTOCOL = "internet_protocol"
         const val PROTOCOL_TRANSLATION = "protocol_translation"
-        const val DEFAULT_DNS_SERVER = "default_dns_server"
+        const val DEFAULT_DNS_SERVER = "default_dns_query"
         const val PCAP_MODE = "pcap_mode"
-        const val RETHINK_REMOTE_CHANGES = "rethink_remote_updates"
         const val REMOTE_BLOCKLIST_UPDATE = "remote_block_list_downloaded_time"
         const val DNS_ALG = "dns_alg"
         const val APP_VERSION = "app_version"
         const val PRIVATE_IPS = "private_ips"
-        const val WIREGUARD_UPDATED = "wireguard_updated"
+        const val RETHINK_IN_RETHINK = "route_rethink_in_rethink"
+        const val PREVENT_DNS_LEAKS = "prevent_dns_leaks"
+        const val CONNECTIVITY_CHECKS = "connectivity_check"
+        const val NOTIFICATION_PERMISSION = "notification_permission_request"
+        const val EXCLUDE_APPS_IN_PROXY = "exclude_apps_in_proxy"
     }
 
     // when vpn is started by the user, this is set to true; set to false when user stops
@@ -81,10 +84,6 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
 
     // total blocklists set by the user for RethinkDNS+ (server-side dns blocking)
     private var numberOfRemoteBlocklists by intPref("remote_block_list_count").withDefault<Int>(0)
-
-    // changes in rethink remote, in case of stamp change and max/sky switch, shared pref won't
-    // update
-    var rethinkRemoteUpdate by booleanPref("rethink_remote_updates").withDefault<Boolean>(false)
 
     // total blocklists set by the user (on-device dns blocking)
     var numberOfLocalBlocklists by intPref("local_block_list_count").withDefault<Int>(0)
@@ -130,7 +129,7 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
         intPref("dns_type")
             .withDefault<Int>(
                 if (!Utilities.isHeadlessFlavour()) AppConfig.DnsType.RETHINK_REMOTE.type
-                else AppConfig.DnsType.NETWORK_DNS.type
+                else AppConfig.DnsType.SYSTEM_DNS.type
             )
 
     // whether the app must attempt to startup on reboot if it was running before shutdown
@@ -146,7 +145,7 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     // whether to check for app updates once-a-week (on website / play-store builds)
     var checkForAppUpdate by booleanPref("check_for_app_update").withDefault<Boolean>(true)
 
-    // last connected dns label name
+    // last connected dns label name and url
     var connectedDnsName by
         stringPref("connected_dns_name")
             .withDefault<String>(context.getString(R.string.default_dns_name))
@@ -239,18 +238,14 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     var shouldRequestNotificationPermission by
         booleanPref("notification_permission_request").withDefault<Boolean>(true)
 
-    // make notification persistent
-    var persistentNotification by
-            booleanPref("persistent_notification").withDefault<Boolean>(false)
+    // make notification persistent (Android 13 and above), default false
+    var persistentNotification by booleanPref("persistent_notification").withDefault<Boolean>(false)
 
     // biometric authentication
     var biometricAuth by booleanPref("biometric_authentication").withDefault<Boolean>(false)
 
     // enable dns alg
-    var enableDnsAlg by booleanPref("dns_alg").withDefault<Boolean>(true)
-
-    // dns crypt relay server
-    var dnscryptRelays by stringPref("dnscrypt_relay").withDefault<String>("")
+    var enableDnsAlg by booleanPref("dns_alg").withDefault<Boolean>(false)
 
     // default dns url
     var defaultDnsUrl by stringPref("default_dns_query").withDefault<String>("")
@@ -267,23 +262,35 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     // biometric last auth time
     var biometricAuthTime by longPref("biometric_auth_time").withDefault<Long>(INIT_TIME_MS)
 
-    // go logger level, default 2 -> info
-    var goLoggerLevel by longPref("go_logger_level").withDefault<Long>(2)
-
-    // count of wireguard enabled, not used remove in future release (current: v055a)
-    var wireguardEnabledCount by intPref("wireguard_enabled_count").withDefault<Int>(0)
-
-    // wireguard updated
-    var wireguardUpdated by booleanPref("wireguard_updated").withDefault<Boolean>(false)
+    // go logger level, default 3 -> info
+    var goLoggerLevel by longPref("go_logger_level").withDefault<Long>(3)
 
     // previous data usage check timestamp
     var prevDataUsageCheck by longPref("prev_data_usage_check").withDefault<Long>(INIT_TIME_MS)
+
+    // route rethink in rethink
+    var routeRethinkInRethink by booleanPref("route_rethink_in_rethink").withDefault<Boolean>(false)
+
+    // perform connectivity checks
+    var connectivityChecks by
+        booleanPref("connectivity_check").withDefault<Boolean>(Utilities.isPlayStoreFlavour())
+
+    // proxy dns requests over proxy
+    var proxyDns by booleanPref("proxy_dns").withDefault<Boolean>(true)
+
+    // exclude apps which are configured in proxy (socks5, http, dns proxy)
+    var excludeAppsInProxy by booleanPref("exclude_apps_in_proxy").withDefault<Boolean>(true)
 
     var orbotConnectionStatus: MutableLiveData<Boolean> = MutableLiveData()
     var median: MutableLiveData<Long> = MutableLiveData()
     var vpnEnabledLiveData: MutableLiveData<Boolean> = MutableLiveData()
     var universalRulesCount: MutableLiveData<Int> = MutableLiveData()
-    var proxyStatus: MutableLiveData<Int> = MutableLiveData()
+    private var proxyStatus: MutableLiveData<Int> = MutableLiveData()
+
+    // data class to store dnscrypt relay details
+    data class DnsCryptRelayDetails(val relay: DnsCryptRelayEndpoint, val added: Boolean)
+
+    var dnsCryptRelays: MutableLiveData<DnsCryptRelayDetails> = MutableLiveData()
 
     var remoteBlocklistCount: MutableLiveData<Int> = MutableLiveData()
 
@@ -296,7 +303,7 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
         _vpnEnabled = isOn
     }
 
-    fun getVpnEnabledLocked(): Boolean {
+    fun getVpnEnabled(): Boolean {
         return _vpnEnabled
     }
 
@@ -411,9 +418,9 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
         return _blockWhenDeviceLocked
     }
 
-    fun getProxyStatus(): Int {
+    fun getProxyStatus(): MutableLiveData<Int> {
         if (proxyStatus.value == null) updateProxyStatus()
-        return proxyStatus.value ?: -1
+        return proxyStatus
     }
 
     fun updateProxyStatus() {

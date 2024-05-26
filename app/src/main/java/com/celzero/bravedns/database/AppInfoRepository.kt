@@ -33,8 +33,28 @@ class AppInfoRepository(private val appInfoDAO: AppInfoDAO) {
         return appInfoDAO.insert(appInfo)
     }
 
+    suspend fun updateUid(oldUid: Int, uid: Int, pkg: String): Int {
+        val isExist = appInfoDAO.isUidPkgExist(uid, pkg)
+        if (isExist != null) {
+            // already app is present with the new uid, so no need to update
+            // in that case, old uid with same pkg should be deleted as we intend to update the uid
+            appInfoDAO.deletePackage(oldUid, pkg)
+            return 0
+        }
+
+        return appInfoDAO.updateUid(oldUid, pkg, uid)
+    }
+
     suspend fun deleteByPackageName(packageNames: List<String>) {
         appInfoDAO.deleteByPackageName(packageNames)
+    }
+
+    suspend fun deletePackage(uid: Int, packageName: String?) {
+        if (packageName == null) {
+            appInfoDAO.deleteByUid(uid)
+        } else {
+            appInfoDAO.deletePackage(uid, packageName)
+        }
     }
 
     suspend fun getAppInfo(): List<AppInfo> {
@@ -72,5 +92,9 @@ class AppInfoRepository(private val appInfoDAO: AppInfoDAO) {
 
     fun updateDataUsageByUid(uid: Int, uploadBytes: Long, downloadBytes: Long) {
         appInfoDAO.updateDataUsageByUid(uid, uploadBytes, downloadBytes)
+    }
+
+    fun updateProxyExcluded(uid: Int, isProxyExcluded: Boolean) {
+        appInfoDAO.updateProxyExcluded(uid, isProxyExcluded)
     }
 }

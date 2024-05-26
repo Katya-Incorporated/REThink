@@ -15,16 +15,20 @@
  */
 package com.celzero.bravedns.adapter
 
+import Logger
+import Logger.LOG_TAG_FIREWALL
 import android.content.Context
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
 import com.celzero.bravedns.R
 import com.celzero.bravedns.databinding.DomainItemBottomSheetBinding
 import com.celzero.bravedns.service.DomainRulesManager
-import com.celzero.bravedns.util.LoggerConstants
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class DomainRulesBtmSheetAdapter(
     val context: Context,
@@ -91,16 +95,15 @@ class DomainRulesBtmSheetAdapter(
         }
 
         private fun applyDomainRule(domain: String, domainRuleStatus: DomainRulesManager.Status) {
-            Log.i(
-                LoggerConstants.LOG_TAG_FIREWALL,
-                "Apply domain rule for $domain, ${domainRuleStatus.name}"
-            )
-            DomainRulesManager.addDomainRule(
-                domain.trim(),
-                domainRuleStatus,
-                DomainRulesManager.DomainType.DOMAIN,
-                uid,
-            )
+            Logger.i(LOG_TAG_FIREWALL, "Apply domain rule for $domain, ${domainRuleStatus.name}")
+            io {
+                DomainRulesManager.addDomainRule(
+                    domain.trim(),
+                    domainRuleStatus,
+                    DomainRulesManager.DomainType.DOMAIN,
+                    uid,
+                )
+            }
         }
 
         private fun enableTrustUi() {
@@ -121,5 +124,9 @@ class DomainRulesBtmSheetAdapter(
             b.trustIcon.setImageDrawable(ContextCompat.getDrawable(context, R.drawable.ic_trust))
             b.blockIcon.setImageDrawable(ContextCompat.getDrawable(context, R.drawable.ic_block))
         }
+    }
+
+    private fun io(f: suspend () -> Unit) {
+        (context as LifecycleOwner).lifecycleScope.launch(Dispatchers.IO) { f() }
     }
 }

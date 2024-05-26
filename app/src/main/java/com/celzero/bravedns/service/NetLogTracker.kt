@@ -17,15 +17,20 @@
 package com.celzero.bravedns.service
 
 import android.content.Context
+import backend.DNSSummary
+import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.data.ConnTrackerMetaData
 import com.celzero.bravedns.data.ConnectionSummary
 import com.celzero.bravedns.database.ConnectionTracker
 import com.celzero.bravedns.database.ConnectionTrackerRepository
 import com.celzero.bravedns.database.DnsLog
 import com.celzero.bravedns.database.DnsLogRepository
+import com.celzero.bravedns.database.RethinkLog
+import com.celzero.bravedns.database.RethinkLogRepository
 import com.celzero.bravedns.util.NetLogBatcher
-import dnsx.Summary
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -33,80 +38,104 @@ import java.util.Calendar
 
 class NetLogTracker
 internal constructor(
-    private val context: Context,
-    private val connectionTrackerRepository: ConnectionTrackerRepository,
-    private val dnsLogRepository: DnsLogRepository,
+    context: Context,
+    connectionTrackerRepository: ConnectionTrackerRepository,
+    rethinkLogRepository: RethinkLogRepository,
+    dnsLogRepository: DnsLogRepository,
     private val persistentState: PersistentState
 ) : KoinComponent {
 
     private val dnsLatencyTracker by inject<QueryTracker>()
 
     private var scope: CoroutineScope? = null
-        private set
 
-    private var dnsLogTracker: DnsLogTracker? = null
-    private var ipTracker: IPTracker? = null
+    private var dnsdb: DnsLogTracker = DnsLogTracker(dnsLogRepository, persistentState, context)
+    private var ipdb: IPTracker =
+        IPTracker(connectionTrackerRepository, rethinkLogRepository, context)
 
-    private var dnsNetLogBatcher: NetLogBatcher<DnsLog>? = null
-    private var ipNetLogBatcher: NetLogBatcher<ConnectionTracker>? = null
-    private var summaryBatcher: NetLogBatcher<ConnectionSummary>? = null
+    private var dnsBatcher: NetLogBatcher<DnsLog, Nothing>? = null
+    private var ipBatcher: NetLogBatcher<ConnectionTracker, ConnectionSummary>? = null
+    private var rinrBatcher: NetLogBatcher<RethinkLog, ConnectionSummary>? = null
 
-    suspend fun startLogger(s: CoroutineScope) {
-        if (ipTracker == null) {
-            ipTracker = IPTracker(connectionTrackerRepository, context)
-        }
-
-        if (dnsLogTracker == null) {
-            dnsLogTracker = DnsLogTracker(dnsLogRepository, persistentState, context)
-        }
-
+    suspend fun restart(s: CoroutineScope) {
         this.scope = s
 
-        // asserting, created object above
-        ipNetLogBatcher = NetLogBatcher(ipTracker!!::insertBatch)
-        ipNetLogBatcher!!.begin(scope!!)
+        // create new batchers on every new scope as their lifecycle is tied to the scope
+        this.dnsBatcher = NetLogBatcher("dns", dnsdb::insertBatch)
+        this.ipBatcher = NetLogBatcher("ip", ipdb::insertBatch, ipdb::updateBatch)
+        this.rinrBatcher = NetLogBatcher("rinr", ipdb::insertRethinkBatch, ipdb::updateRethinkBatch)
 
-        dnsNetLogBatcher = NetLogBatcher(dnsLogTracker!!::insertBatch)
-        dnsNetLogBatcher!!.begin(scope!!)
-
-        summaryBatcher = NetLogBatcher(ipTracker!!::updateBatch)
-        summaryBatcher!!.begin(scope!!)
+        dnsBatcher!!.begin(s)
+        ipBatcher!!.begin(s)
+        rinrBatcher!!.begin(s)
     }
 
     fun writeIpLog(info: ConnTrackerMetaData) {
         if (!persistentState.logsEnabled) return
 
-        scope?.launch {
-            val connTracker = ipTracker?.makeConnectionTracker(info) ?: return@launch
-            ipNetLogBatcher?.add(connTracker)
+        io("writeIpLog") {
+            val connTracker = ipdb.makeConnectionTracker(info)
+            ipBatcher?.add(connTracker)
+        }
+    }
+
+    fun writeRethinkLog(info: ConnTrackerMetaData) {
+        if (!persistentState.logsEnabled) return
+
+        io("writeRethinkLog") {
+            val rlog = ipdb.makeRethinkLogs(info) ?: return@io
+            rinrBatcher?.add(rlog)
         }
     }
 
     fun updateIpSummary(summary: ConnectionSummary) {
         if (!persistentState.logsEnabled) return
 
-        scope?.launch { summaryBatcher?.add(summary) }
+        io("updateIpSmm") {
+            val s =
+                if (DEBUG && summary.targetIp?.isNotEmpty() == true) {
+                    ipdb.makeSummaryWithTarget(summary)
+                } else {
+                    summary
+                }
+
+            ipBatcher?.update(s)
+        }
+    }
+
+    fun updateRethinkSummary(summary: ConnectionSummary) {
+        if (!persistentState.logsEnabled) return
+
+        io("updateRethinkSmm") {
+            val s =
+                if (DEBUG && summary.targetIp?.isNotEmpty() == true) {
+                    ipdb.makeSummaryWithTarget(summary)
+                } else {
+                    summary
+                }
+
+            rinrBatcher?.update(s)
+        }
     }
 
     // now, this method is doing multiple things which should be removed.
     // fixme: should intend to only write the logs to database.
-    fun processDnsLog(summary: Summary) {
-        val transaction = dnsLogTracker?.processOnResponse(summary) ?: return
+    fun processDnsLog(summary: DNSSummary) {
+        val transaction = dnsdb.processOnResponse(summary)
 
         transaction.responseCalendar = Calendar.getInstance()
-        // quantile estimator
-        dnsLatencyTracker.recordTransaction(transaction)
-
-        val dnsLog = dnsLogTracker?.makeDnsLogObj(transaction) ?: return
+        // refresh latency from GoVpnAdapter
+        io("refreshDnsLatency") { dnsLatencyTracker.refreshLatencyIfNeeded(transaction) }
 
         // TODO: This method should be part of BraveVPNService
-        dnsLogTracker?.updateVpnConnectionState(transaction)
+        dnsdb.updateVpnConnectionState(transaction)
 
-        // ideally this check should be carried out before processing the dns object.
-        // Now, the ipDomain cache is adding while making the dnsLog object.
-        // TODO: move ipDomain cache out of DnsLog object creation
         if (!persistentState.logsEnabled) return
 
-        scope?.launch { dnsNetLogBatcher?.add(dnsLog) }
+        val dnsLog = dnsdb.makeDnsLogObj(transaction)
+        io("writeDnsLog") { dnsBatcher?.add(dnsLog) }
     }
+
+    private fun io(s: String, f: suspend () -> Unit) =
+        scope?.launch(CoroutineName(s) + Dispatchers.IO) { f() }
 }

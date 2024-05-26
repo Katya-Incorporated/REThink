@@ -33,6 +33,7 @@ import java.util.Locale
             Index(value = arrayOf("responseIps"), unique = false),
             Index(value = arrayOf("isBlocked"), unique = false),
             Index(value = arrayOf("blockLists"), unique = false),
+            Index(value = arrayOf("time"), unique = false),
         ]
 )
 class DnsLog {
@@ -54,6 +55,8 @@ class DnsLog {
     var dnsType: Int = 0
     var responseIps: String = ""
     var resolverId: String = ""
+    var msg: String = ""
+    var upstreamBlock: Boolean = false
 
     override fun equals(other: Any?): Boolean {
         if (other !is DnsLog) return false

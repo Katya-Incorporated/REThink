@@ -1,23 +1,22 @@
 package com.celzero.bravedns.service
 
+import Logger
+import Logger.LOG_TAG_PROXY
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
+import backend.Backend
 import com.celzero.bravedns.customdownloader.ITcpProxy
 import com.celzero.bravedns.customdownloader.RetrofitManager
 import com.celzero.bravedns.data.AppConfig
 import com.celzero.bravedns.database.TcpProxyEndpoint
 import com.celzero.bravedns.database.TcpProxyRepository
 import com.celzero.bravedns.scheduler.PaymentWorker
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_PROXY
-import dnsx.Dnsx
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -31,13 +30,13 @@ import java.util.concurrent.TimeUnit
 
 object TcpProxyHelper : KoinComponent {
 
-    private val tcpProxyRespository: TcpProxyRepository by inject()
+    private val db: TcpProxyRepository by inject()
     private val appConfig: AppConfig by inject()
     private val persistentState: PersistentState by inject()
 
     private val tcpProxies = mutableSetOf<TcpProxyEndpoint>()
 
-    private var cfIpTrie: dnsx.IpTree = Dnsx.newIpTree()
+    private var cfIpTrie: backend.IpTree = Backend.newIpTree()
 
     private const val DEFAULT_ID = 0
     const val PAYMENT_WORKER_TAG = "payment_worker_tag"
@@ -86,7 +85,9 @@ object TcpProxyHelper : KoinComponent {
         INVALID(5);
 
         fun isPaid() = this == PAID
+
         fun isFailed() = this == FAILED
+
         fun isNotPaid() = this == NOT_PAID
     }
 
@@ -94,25 +95,26 @@ object TcpProxyHelper : KoinComponent {
         io { load() }
     }
 
-    suspend fun load() {
-        if (tcpProxies.isNotEmpty()) return
-
+    suspend fun load(): Int {
         tcpProxies.clear()
-        tcpProxies.addAll(tcpProxyRespository.getTcpProxies())
+        tcpProxies.addAll(db.getTcpProxies())
         loadTrie()
+        return tcpProxies.size
     }
 
     private fun loadTrie() {
-        cfIpTrie = Dnsx.newIpTree()
+        cfIpTrie = Backend.newIpTree()
         cfIpAddresses.forEach { cfIpTrie.set(it, "") }
-        if (DEBUG) Log.d(LOG_TAG_PROXY, "loadTrie: loading trie for cloudflare ips")
+        Logger.d(LOG_TAG_PROXY, "loadTrie: loading trie for cloudflare ips")
     }
 
     fun isCloudflareIp(ip: String): Boolean {
+        // do not check for cloudflare ips for now
+        // return false
         return try {
             cfIpTrie.hasAny(ip)
         } catch (e: Exception) {
-            Log.w(LOG_TAG_PROXY, "isCloudflareIp: exception while checking ip: $ip")
+            Logger.w(LOG_TAG_PROXY, "isCloudflareIp: exception while checking ip: $ip")
             false
         }
     }
@@ -124,46 +126,62 @@ object TcpProxyHelper : KoinComponent {
         return dateFormat.format(date)
     }
 
-    suspend fun publicKeyUsable(): Boolean {
+    suspend fun publicKeyUsable(retryCount: Int = 0): Boolean {
         var works = false
         try {
             val retrofit =
-                RetrofitManager.getTcpProxyBaseBuilder(
-                        RetrofitManager.Companion.OkHttpDnsType.DEFAULT
-                    )
+                RetrofitManager.getTcpProxyBaseBuilder(retryCount)
                     .addConverterFactory(GsonConverterFactory.create())
                     .build()
             val retrofitInterface = retrofit.create(ITcpProxy::class.java)
 
             val response = retrofitInterface.getPublicKey(persistentState.appVersion.toString())
-            if (DEBUG)
-                Log.d(
-                    LOG_TAG_PROXY,
-                    "new tcp config: ${response?.headers()}, ${response?.message()}, ${response?.raw()?.request?.url}"
-                )
+            Logger.d(
+                LOG_TAG_PROXY,
+                "new tcp config: ${response?.headers()}, ${response?.message()}, ${response?.raw()?.request?.url}"
+            )
 
             if (response?.isSuccessful == true) {
                 val jsonObject = JSONObject(response.body().toString())
                 works = jsonObject.optString(JSON_STATUS, "") == STATUS_OK
                 val minVersionCode = jsonObject.optString(JSON_MIN_VERSION_CODE, "")
                 publicKey = jsonObject.optString(JSON_PUB_KEY, "")
-                Log.i(
+                Logger.i(
                     LOG_TAG_PROXY,
                     "tcp response for ${response.raw().request.url}, works? $works, minVersionCode: $minVersionCode, publicKey: $publicKey"
                 )
+                return works
             } else {
-                Log.w(LOG_TAG_PROXY, "unsuccessful response for ${response?.raw()?.request?.url}")
+                Logger.w(
+                    LOG_TAG_PROXY,
+                    "unsuccessful response for ${response?.raw()?.request?.url}"
+                )
             }
         } catch (e: Exception) {
-            Log.w(LOG_TAG_PROXY, "publicKeyUsable: exception while checking public key", e)
+            Logger.e(
+                LOG_TAG_PROXY,
+                "publicKeyUsable: exception while checking public key: ${e.message}",
+                e
+            )
         }
-        return works
+
+        return if (isRetryRequired(retryCount) && !works) {
+            Logger.i(Logger.LOG_TAG_DOWNLOAD, "retrying publicKeyUsable for $retryCount")
+            publicKeyUsable(retryCount + 1)
+        } else {
+            Logger.i(Logger.LOG_TAG_DOWNLOAD, "retry count exceeded for publicKeyUsable")
+            works
+        }
+    }
+
+    private fun isRetryRequired(retryCount: Int): Boolean {
+        return retryCount < RetrofitManager.Companion.OkHttpDnsType.entries.size - 1
     }
 
     suspend fun isPaymentInitiated(): Boolean {
         val tcpProxy = tcpProxies.find { it.id == DEFAULT_ID }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "isPaymentInitiated: tcpProxy not found")
+            Logger.w(LOG_TAG_PROXY, "isPaymentInitiated: tcpProxy not found")
             return false
         }
         return tcpProxy.paymentStatus == PaymentStatus.INITIATED.value
@@ -172,7 +190,7 @@ object TcpProxyHelper : KoinComponent {
     suspend fun isPaymentExpired(): Boolean {
         val tcpProxy = tcpProxies.find { it.id == DEFAULT_ID }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "isPaymentExpired: tcpProxy not found")
+            Logger.w(LOG_TAG_PROXY, "isPaymentExpired: tcpProxy not found")
             return false
         }
         return tcpProxy.paymentStatus == PaymentStatus.EXPIRED.value
@@ -181,7 +199,7 @@ object TcpProxyHelper : KoinComponent {
     fun getTcpProxyPaymentStatus(): PaymentStatus {
         val tcpProxy = tcpProxies.find { it.id == DEFAULT_ID }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "getTcpProxyPaymentStatus: tcpProxy not found")
+            Logger.w(LOG_TAG_PROXY, "getTcpProxyPaymentStatus: tcpProxy not found")
             return PaymentStatus.NOT_PAID
         }
         return PaymentStatus.values().find { it.value == tcpProxy.paymentStatus }
@@ -192,7 +210,7 @@ object TcpProxyHelper : KoinComponent {
         if (publicKey.isEmpty()) {
             publicKeyUsable()
         } else {
-            Log.i(LOG_TAG_PROXY, "getPublicKey: returning cached public key")
+            Logger.i(LOG_TAG_PROXY, "getPublicKey: returning cached public key")
         }
         return publicKey
     }
@@ -200,42 +218,41 @@ object TcpProxyHelper : KoinComponent {
     suspend fun updatePaymentStatus(paymentStatus: PaymentStatus) {
         val tcpProxy = tcpProxies.find { it.id == DEFAULT_ID }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "updatePaymentStatus: tcpProxy not found")
+            Logger.w(LOG_TAG_PROXY, "updatePaymentStatus: tcpProxy not found")
             return
         }
         tcpProxy.paymentStatus = paymentStatus.value
-        tcpProxyRespository.update(tcpProxy)
+        db.update(tcpProxy)
     }
 
     suspend fun updateToken(token: String) {
         val tcpProxy = tcpProxies.find { it.id == DEFAULT_ID }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "updateToken: tcpProxy not found")
+            Logger.w(LOG_TAG_PROXY, "updateToken: tcpProxy not found")
             return
         }
         tcpProxy.token = token
-        tcpProxyRespository.update(tcpProxy)
+        db.update(tcpProxy)
     }
 
     suspend fun updateUrl(url: String) {
         val tcpProxy = tcpProxies.find { it.id == DEFAULT_ID }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "updateUrl: tcpProxy not found")
+            Logger.w(LOG_TAG_PROXY, "updateUrl: tcpProxy not found")
             return
         }
         tcpProxy.url = url
-        tcpProxyRespository.update(tcpProxy)
+        db.update(tcpProxy)
     }
 
     fun initiatePaymentVerification(context: Context) {
         val appContext = context.applicationContext
-        if (DEBUG)
-            Log.d(LOG_TAG_PROXY, "initiatePaymentVerification: initiating payment verification")
+        Logger.d(LOG_TAG_PROXY, "initiatePaymentVerification: initiating payment verification")
 
         // if worker is already running, don't start another one
         val workInfos = WorkManager.getInstance(appContext).getWorkInfosByTag(PAYMENT_WORKER_TAG)
         if (workInfos.get().any { it.state == WorkInfo.State.RUNNING }) {
-            Log.i(LOG_TAG_PROXY, "initiatePaymentVerification: worker already running")
+            Logger.i(LOG_TAG_PROXY, "initiatePaymentVerification: worker already running")
             return
         }
 
@@ -254,31 +271,31 @@ object TcpProxyHelper : KoinComponent {
                 .setInitialDelay(10, TimeUnit.SECONDS)
                 .build()
 
-        Log.i(LOG_TAG_PROXY, "initiatePaymentVerification: enqueuing payment worker")
+        Logger.i(LOG_TAG_PROXY, "initiatePaymentVerification: enqueuing payment worker")
         WorkManager.getInstance(appContext).beginWith(paymentWorker).enqueue()
     }
 
     suspend fun enable(id: Int = DEFAULT_ID) {
         val tcpProxy = tcpProxies.find { it.id == id }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "enable: tcpProxy not found for id: $id")
+            Logger.w(LOG_TAG_PROXY, "enable: tcpProxy not found for id: $id")
             return
         }
 
         tcpProxy.isActive = true
-        tcpProxyRespository.update(tcpProxy)
+        db.update(tcpProxy)
         appConfig.addProxy(AppConfig.ProxyType.TCP, AppConfig.ProxyProvider.TCP)
     }
 
     suspend fun disable(id: Int = DEFAULT_ID) {
         val tcpProxy = tcpProxies.find { it.id == id }
         if (tcpProxy == null) {
-            Log.w(LOG_TAG_PROXY, "disable: tcpProxy not found for id: $id")
+            Logger.w(LOG_TAG_PROXY, "disable: tcpProxy not found for id: $id")
             return
         }
 
         tcpProxy.isActive = false
-        tcpProxyRespository.update(tcpProxy)
+        db.update(tcpProxy)
         appConfig.removeProxy(AppConfig.ProxyType.TCP, AppConfig.ProxyProvider.TCP)
     }
 

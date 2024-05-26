@@ -16,7 +16,7 @@
  */
 package com.celzero.bravedns.net.doh
 
-import dnsx.Dnsx
+import backend.Backend
 import java.util.Calendar
 
 class Transaction {
@@ -34,20 +34,23 @@ class Transaction {
     var id: String = ""
     var ttl: Long = 0L
     var transportType: TransportType = TransportType.DOH
+    var msg: String = ""
+    var upstreamBlock: Boolean = false
 
     enum class Status(val id: Long) {
-        START(Dnsx.Start),
-        COMPLETE(Dnsx.Complete),
-        SEND_FAIL(Dnsx.SendFailed),
-        TRANSPORT_ERROR(Dnsx.TransportError),
-        NO_RESPONSE(Dnsx.NoResponse),
-        BAD_RESPONSE(Dnsx.BadResponse),
-        BAD_QUERY(Dnsx.BadQuery),
-        INTERNAL_ERROR(Dnsx.InternalError);
+        START(Backend.Start),
+        COMPLETE(Backend.Complete),
+        SEND_FAIL(Backend.SendFailed),
+        TRANSPORT_ERROR(Backend.TransportError),
+        NO_RESPONSE(Backend.NoResponse),
+        BAD_RESPONSE(Backend.BadResponse),
+        BAD_QUERY(Backend.BadQuery),
+        CLIENT_ERROR(Backend.ClientError),
+        INTERNAL_ERROR(Backend.InternalError);
 
         companion object {
             fun fromId(id: Long): Status {
-                for (status in values()) {
+                for (status in enumValues<Status>()) {
                     if (status.id == id) {
                         return status
                     }
@@ -58,20 +61,20 @@ class Transaction {
     }
 
     enum class TransportType(val type: String) {
-        DOH(Dnsx.DOH),
-        DNS_CRYPT(Dnsx.DNSCrypt),
-        DNS_PROXY(Dnsx.DNS53);
-
-        fun isDnsCrypt(): Boolean {
-            return this == DNS_CRYPT
-        }
+        DOH(Backend.DOH),
+        DNS_CRYPT(Backend.DNSCrypt),
+        DNS_PROXY(Backend.DNS53),
+        DOT(Backend.DOT),
+        ODOH(Backend.ODOH);
 
         companion object {
             fun getType(type: String): TransportType {
                 return when (type) {
-                    Dnsx.DOH -> DOH
-                    Dnsx.DNSCrypt -> DNS_CRYPT
-                    Dnsx.DNS53 -> DNS_PROXY
+                    Backend.DOH -> DOH
+                    Backend.DNSCrypt -> DNS_CRYPT
+                    Backend.DNS53 -> DNS_PROXY
+                    Backend.DOT -> DOT
+                    Backend.ODOH -> ODOH
                     else -> DOH
                 }
             }

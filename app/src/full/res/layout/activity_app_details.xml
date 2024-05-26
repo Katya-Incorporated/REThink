@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="?attr/background"
-    android:nestedScrollingEnabled="false"
-    app:layout_behavior="@string/appbar_scrolling_view_behavior">
+    android:fillViewport="true"
+    app:layout_behavior="@string/appbar_scrolling_view_behavior"
+    app:layout_scrollFlags="scroll|enterAlways">
 
-    <LinearLayout
+    <androidx.appcompat.widget.LinearLayoutCompat
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical">
@@ -24,10 +25,10 @@
                 android:id="@+id/aad_app_detail_icon"
                 android:layout_width="60dp"
                 android:layout_height="60dp"
-                android:layout_gravity="center"
+                android:layout_centerVertical="true"
                 android:src="@drawable/dns_icon" />
 
-            <LinearLayout
+            <androidx.appcompat.widget.LinearLayoutCompat
                 android:id="@+id/aad_app_detail_ll"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -60,9 +61,9 @@
                     android:padding="5dp"
                     android:textColor="?primaryTextColor"
                     android:textSize="@dimen/default_font_text_view" />
-            </LinearLayout>
+            </androidx.appcompat.widget.LinearLayoutCompat>
 
-            <LinearLayout
+            <androidx.appcompat.widget.LinearLayoutCompat
                 android:id="@+id/aad_icon_holder_ll"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -80,18 +81,20 @@
                     android:src="@drawable/brave_mode_info" />
 
 
-            </LinearLayout>
+            </androidx.appcompat.widget.LinearLayoutCompat>
 
         </RelativeLayout>
 
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/aad_app_settings_card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="4dp"
+            android:clipToPadding="true"
+            app:cardCornerRadius="8dp"
+            app:cardElevation="8dp"
             app:cardUseCompatPadding="true">
 
-            <LinearLayout
+            <androidx.appcompat.widget.LinearLayoutCompat
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="5dp"
@@ -104,7 +107,7 @@
                     android:id="@+id/aad_aap_firewall_new_card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:padding="5dp">
+                    android:padding="10dp">
 
                     <TextView
                         style="@style/TextAppearance.AppCompat.Subhead"
@@ -118,24 +121,15 @@
                         android:textSize="@dimen/large_font_text_view"
                         android:textStyle="bold" />
 
-                    <androidx.appcompat.widget.AppCompatImageView
-                        android:id="@+id/aad_aap_firewall_indicator"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_alignParentEnd="true"
-                        android:alpha="0.5"
-                        android:minWidth="24dp"
-                        android:minHeight="24dp"
-                        android:src="@drawable/ic_arrow_down" />
                 </RelativeLayout>
 
-                <LinearLayout
+                <androidx.appcompat.widget.LinearLayoutCompat
                     android:id="@+id/aad_app_settings_ll"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical">
 
-                    <LinearLayout
+                    <androidx.appcompat.widget.LinearLayoutCompat
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="center"
@@ -156,7 +150,6 @@
                             android:textSize="@dimen/default_font_text_view"
                             android:visibility="gone"
                             app:drawableTopCompat="@drawable/ic_firewall_allow_grey" />
-
 
                         <TextView
                             android:id="@+id/aad_app_settings_block_wifi"
@@ -203,10 +196,9 @@
                             android:textSize="@dimen/default_font_text_view"
                             app:drawableTopCompat="@drawable/ic_firewall_lockdown_off" />
 
+                    </androidx.appcompat.widget.LinearLayoutCompat>
 
-                    </LinearLayout>
-
-                    <LinearLayout
+                    <androidx.appcompat.widget.LinearLayoutCompat
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="5dp"
@@ -259,9 +251,9 @@
                             android:textSize="@dimen/default_font_text_view"
                             app:drawableTopCompat="@drawable/ic_firewall_exclude_off" />
 
-                    </LinearLayout>
-                </LinearLayout>
-            </LinearLayout>
+                    </androidx.appcompat.widget.LinearLayoutCompat>
+                </androidx.appcompat.widget.LinearLayoutCompat>
+            </androidx.appcompat.widget.LinearLayoutCompat>
         </com.google.android.material.card.MaterialCardView>
 
         <com.google.android.material.card.MaterialCardView
@@ -331,7 +323,54 @@
 
         </com.google.android.material.card.MaterialCardView>
 
-        <LinearLayout
+        <RelativeLayout
+            android:id="@+id/exclude_proxy_rl"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?android:attr/selectableItemBackground"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp">
+
+            <androidx.appcompat.widget.AppCompatImageView
+                android:id="@+id/exclude_proxy_icon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_centerVertical="true"
+                android:layout_marginStart="5dp"
+                android:layout_marginTop="5dp"
+                android:layout_marginEnd="5dp"
+                android:layout_marginBottom="5dp"
+                android:padding="10dp"
+                android:src="@drawable/ic_proxy_white" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_centerVertical="true"
+                android:layout_toStartOf="@id/exclude_proxy_switch"
+                android:layout_toEndOf="@id/exclude_proxy_icon"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/exclude_proxy_txt"
+                    style="@style/TextAppearance.AppCompat.Subhead"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/exclude_apps_from_proxy"
+                    android:textSize="@dimen/large_font_text_view" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/exclude_proxy_switch"
+                style="@style/CustomWidget.MaterialComponents.CompoundButton.Switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_alignParentEnd="true"
+                android:layout_centerVertical="true"
+                android:padding="10dp" />
+        </RelativeLayout>
+
+        <androidx.appcompat.widget.LinearLayoutCompat
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
@@ -342,18 +381,19 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="0.5"
+                android:clipToPadding="true"
                 app:cardCornerRadius="8dp"
-                app:cardElevation="4dp"
+                app:cardElevation="8dp"
                 app:cardUseCompatPadding="true">
 
-                <LinearLayout
+                <androidx.appcompat.widget.LinearLayoutCompat
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"
                     android:layout_marginEnd="10dp"
                     android:orientation="vertical"
-                    android:paddingTop="5dp"
-                    android:paddingBottom="5dp">
+                    android:paddingTop="10dp"
+                    android:paddingBottom="10dp">
 
 
                     <TextView
@@ -373,12 +413,13 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="center"
+                        android:drawablePadding="5dp"
                         android:paddingTop="2dp"
                         android:paddingBottom="2dp"
                         android:text="@string/lbl_ip_rules"
                         android:textSize="@dimen/default_font_text_view" />
 
-                </LinearLayout>
+                </androidx.appcompat.widget.LinearLayoutCompat>
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
@@ -386,18 +427,19 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="0.5"
+                android:clipToPadding="true"
                 app:cardCornerRadius="8dp"
-                app:cardElevation="4dp"
+                app:cardElevation="8dp"
                 app:cardUseCompatPadding="true">
 
-                <LinearLayout
+                <androidx.appcompat.widget.LinearLayoutCompat
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"
                     android:layout_marginEnd="10dp"
                     android:orientation="vertical"
-                    android:paddingTop="5dp"
-                    android:paddingBottom="5dp">
+                    android:paddingTop="10dp"
+                    android:paddingBottom="10dp">
 
                     <TextView
                         android:id="@+id/aad_domain_block_header"
@@ -416,165 +458,109 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="center"
+                        android:drawablePadding="5dp"
                         android:paddingTop="2dp"
                         android:paddingBottom="2dp"
                         android:text="@string/lbl_domain_rules"
                         android:textSize="@dimen/default_font_text_view" />
 
-                </LinearLayout>
+                </androidx.appcompat.widget.LinearLayoutCompat>
             </com.google.android.material.card.MaterialCardView>
-        </LinearLayout>
+        </androidx.appcompat.widget.LinearLayoutCompat>
 
-        <com.google.android.material.card.MaterialCardView
-            android:id="@+id/aad_conn_card"
+
+        <RelativeLayout
+            android:id="@+id/aad_most_contacted_domain_rl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="4dp"
-            app:cardUseCompatPadding="true">
+            android:layout_marginTop="10dp"
+            android:visibility="gone">
 
-            <LinearLayout
-                android:layout_width="match_parent"
+            <androidx.appcompat.widget.AppCompatTextView
+                style="@style/TextAppearance.AppCompat.Subhead"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
-                android:layout_marginEnd="10dp"
-                android:orientation="vertical"
-                android:paddingTop="5dp"
-                android:paddingBottom="5dp">
+                android:layout_alignParentStart="true"
+                android:layout_centerVertical="true"
+                android:layout_marginStart="20dp"
+                android:layout_toStartOf="@id/aad_domains_chip"
+                android:fontFamily="sans-serif-smallcaps"
+                android:lineSpacingExtra="5dp"
+                android:padding="5dp"
+                android:text="@string/ssv_most_contacted_domain_heading"
+                android:textColor="?attr/primaryLightColorText"
+                android:textSize="@dimen/extra_large_font_text_view" />
 
-                <RelativeLayout
-                    android:id="@+id/aad_conn_detail_rl"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content">
+            <com.google.android.material.chip.Chip
+                android:id="@+id/aad_domains_chip"
+                style="@style/ThinnerChip.Action"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_alignParentEnd="true"
+                android:layout_centerInParent="true"
+                android:layout_gravity="end"
+                android:layout_marginEnd="14dp"
+                android:text="@string/ssv_see_more"
+                android:textColor="?attr/chipTextPositive"
+                android:textSize="@dimen/large_font_text_view"
+                android:visibility="visible"
+                app:chipBackgroundColor="?attr/chipBgColorPositive"
+                app:chipSurfaceColor="@null" />
 
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_centerVertical="true"
-                        android:layout_toStartOf="@id/aad_conn_detail_indicator"
-                        android:orientation="vertical">
+        </RelativeLayout>
 
-                        <TextView
-                            android:id="@+id/aad_conn_detail_header"
-                            style="@style/TextAppearance.AppCompat.Subhead"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="sans-serif-smallcaps"
-                            android:gravity="center_vertical"
-                            android:padding="5dp"
-                            android:text="@string/ada_network_log_title"
-                            android:textColor="?attr/secondaryTextColor"
-                            android:textSize="@dimen/large_font_text_view"
-                            android:textStyle="bold" />
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/aad_most_contacted_domain_rv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:nestedScrollingEnabled="false" />
 
-                        <TextView
-                            android:id="@+id/aad_conn_detail_desc"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:paddingStart="5dp"
-                            android:paddingTop="2dp"
-                            android:paddingEnd="5dp"
-                            android:paddingBottom="5dp"
-                            android:text="@string/ada_ip_no_connection"
-                            android:textSize="@dimen/default_font_text_view" />
+        <RelativeLayout
+            android:id="@+id/aad_most_contacted_ips_rl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:visibility="gone">
 
-                    </LinearLayout>
+            <androidx.appcompat.widget.AppCompatTextView
+                style="@style/TextAppearance.AppCompat.Subhead"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_alignParentStart="true"
+                android:layout_centerVertical="true"
+                android:layout_marginStart="20dp"
+                android:layout_toStartOf="@id/aad_ips_chip"
+                android:fontFamily="sans-serif-smallcaps"
+                android:lineSpacingExtra="5dp"
+                android:padding="5dp"
+                android:text="@string/ssv_most_contacted_ips_heading"
+                android:textColor="?attr/primaryLightColorText"
+                android:textSize="@dimen/extra_large_font_text_view" />
 
-                    <androidx.appcompat.widget.AppCompatImageView
-                        android:id="@+id/aad_conn_delete"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_centerVertical="true"
-                        android:layout_toStartOf="@id/aad_conn_detail_indicator"
-                        android:alpha="0.5"
-                        android:minWidth="24dp"
-                        android:minHeight="24dp"
-                        android:padding="10dp"
-                        android:src="@drawable/ic_delete" />
+            <com.google.android.material.chip.Chip
+                android:id="@+id/aad_ips_chip"
+                style="@style/ThinnerChip.Action"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_alignParentEnd="true"
+                android:layout_centerInParent="true"
+                android:layout_gravity="end"
+                android:layout_marginEnd="14dp"
+                android:text="@string/ssv_see_more"
+                android:textColor="?attr/chipTextPositive"
+                android:textSize="@dimen/large_font_text_view"
+                android:visibility="visible"
+                app:chipBackgroundColor="?attr/chipBgColorPositive"
+                app:chipSurfaceColor="@null" />
 
-                    <androidx.appcompat.widget.AppCompatImageView
-                        android:id="@+id/aad_conn_detail_indicator"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_alignParentEnd="true"
-                        android:layout_centerVertical="true"
-                        android:alpha="0.5"
-                        android:minWidth="24dp"
-                        android:minHeight="24dp"
-                        android:src="@drawable/ic_arrow_up" />
-                </RelativeLayout>
+        </RelativeLayout>
 
-                <LinearLayout
-                    android:id="@+id/aad_conn_list_top_ll"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical">
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/aad_most_contacted_ips_rv"
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:nestedScrollingEnabled="false" />
 
-                    <LinearLayout
-                        android:id="@+id/aad_conn_detail_search_ll"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical">
+    </androidx.appcompat.widget.LinearLayoutCompat>
 
-                        <com.google.android.material.card.MaterialCardView
-                            android:id="@+id/aad_conn_detail_search_container"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:focusableInTouchMode="true"
-                            android:visibility="visible">
-
-                            <LinearLayout
-                                android:id="@+id/aad_conn_search_ll"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:gravity="start"
-                                android:orientation="horizontal">
-
-                                <androidx.appcompat.widget.SearchView
-                                    android:id="@+id/aad_conn_detail_search"
-                                    android:layout_width="match_parent"
-                                    android:layout_height="35dp"
-                                    android:layout_gravity="start"
-                                    android:focusable="false"
-                                    android:fontFamily="sans-serif"
-                                    android:isScrollContainer="true"
-                                    app:iconifiedByDefault="false"
-                                    app:queryHint="@string/search_universal_ips" />
-
-                            </LinearLayout>
-                        </com.google.android.material.card.MaterialCardView>
-                    </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/aad_conn_detail_empty_txt"
-                        style="@style/TextAppearance.AppCompat.Body1"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="5dp"
-                        android:layout_marginBottom="10dp"
-                        android:paddingStart="20dp"
-                        android:paddingEnd="20dp"
-                        android:paddingBottom="10dp"
-                        android:text="@string/ada_ip_no_connection"
-                        android:textSize="@dimen/default_font_text_view"
-                        android:visibility="gone" />
-
-                    <androidx.recyclerview.widget.RecyclerView
-                        android:id="@+id/aad_conn_detail_recycler"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="5dp"
-                        android:layout_marginBottom="10dp"
-                        android:background="?android:attr/selectableItemBackground"
-                        android:clipToPadding="false"
-                        android:nestedScrollingEnabled="false"
-                        android:paddingBottom="10dp"
-                        app:layout_behavior="@string/appbar_scrolling_view_behavior" />
-
-                </LinearLayout>
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-    </LinearLayout>
-
-</LinearLayout>
+</androidx.core.widget.NestedScrollView>

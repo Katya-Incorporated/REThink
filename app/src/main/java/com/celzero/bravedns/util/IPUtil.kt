@@ -15,7 +15,8 @@
  */
 package com.celzero.bravedns.util
 
-import android.util.Log
+import Logger
+import Logger.LOG_TAG_VPN
 import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import inet.ipaddr.IPAddress
 import inet.ipaddr.IPAddressString
@@ -32,24 +33,11 @@ class IPUtil {
             return ip.isIPv6
         }
 
-        fun canMakeIpv4(ip: IPAddress): Boolean {
-
-            if (isIpV4Compatible(ip)) {
-                return true
+        fun ip4in6(ip: IPAddress): IPAddress? {
+            if (ip.isIPv4) {
+                // already v4; no need to convert
+                return null
             }
-
-            if (isIpv6Prefix64(ip)) {
-                return true
-            }
-
-            if (isIpTeredo(ip)) {
-                return true
-            }
-
-            return false
-        }
-
-        fun toIpV4(ip: IPAddress): IPAddress? {
             if (isIpV4Compatible(ip)) {
                 return ip.toIPv4()
             }
@@ -77,9 +65,7 @@ class IPUtil {
 
         // for IPv4-Mapped IPv6 Address and IPv4 embedded IPv6 (prefix: 2001:db8::/32)
         private fun isIpV4Compatible(ip: IPAddress): Boolean {
-            if (ip.isIPv6 && ip.isIPv4Convertible && ip.toIPv4() != null) return true
-
-            return false
+            return ip.isIPv6 && ip.isIPv4Convertible && ip.toIPv4() != null
         }
 
         // for teredo tunneling
@@ -137,11 +123,7 @@ class IPUtil {
             if (start == null || end == null) return null
 
             val listResult: MutableList<CIDR> = ArrayList()
-            if (DEBUG)
-                Log.d(
-                    LoggerConstants.LOG_TAG_VPN,
-                    "toCIDR(" + start.hostAddress + "," + end.hostAddress + ")"
-                )
+            Logger.d(LOG_TAG_VPN, "toCIDR(" + start.hostAddress + "," + end.hostAddress + ")")
             var from: Long = inet2long(start)
             val to: Long = inet2long(end)
             while (to >= from) {
@@ -157,7 +139,7 @@ class IPUtil {
                 from += 2.0.pow((32 - prefix).toDouble()).toLong()
             }
             if (DEBUG) {
-                for (cidr in listResult) Log.d(LoggerConstants.LOG_TAG_VPN, cidr.toString())
+                for (cidr in listResult) Logger.d(LOG_TAG_VPN, cidr.toString())
             }
             return listResult
         }
@@ -210,12 +192,13 @@ class IPUtil {
                 address = InetAddress.getByName(ip)
                 this.prefix = prefix
             } catch (ex: UnknownHostException) {
-                Log.e(LoggerConstants.LOG_TAG_VPN, "error parsing CIDR, $ip, $prefix, $ex")
+                Logger.e(LOG_TAG_VPN, "error parsing CIDR, $ip, $prefix, $ex")
             }
         }
 
         val start: InetAddress?
             get() = long2inet(inet2long(address) and prefix2mask(prefix))
+
         val end: InetAddress?
             get() =
                 long2inet((inet2long(address) and prefix2mask(prefix)) + (1L shl 32 - prefix) - 1)

@@ -16,8 +16,9 @@
 
 package com.celzero.bravedns.scheduler
 
+import Logger
+import Logger.LOG_TAG_SCHEDULER
 import android.content.Context
-import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -26,8 +27,6 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_SCHEDULER
 import com.celzero.bravedns.util.Utilities
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.ExecutionException
@@ -43,14 +42,14 @@ class WorkScheduler(val context: Context) {
         const val DATA_USAGE_JOB_TAG = "ScheduledDataUsageJob"
 
         const val APP_EXIT_INFO_JOB_TIME_INTERVAL_DAYS: Long = 7
-        const val PURGE_LOGS_TIME_INTERVAL_DAYS: Long = 7
+        const val PURGE_LOGS_TIME_INTERVAL_HOURS: Long = 4
         const val BLOCKLIST_UPDATE_CHECK_INTERVAL_DAYS: Long = 3
         const val DATA_USAGE_TIME_INTERVAL_MINS: Long = 20
 
         fun isWorkRunning(context: Context, tag: String): Boolean {
             val instance = WorkManager.getInstance(context)
             val statuses: ListenableFuture<List<WorkInfo>> = instance.getWorkInfosByTag(tag)
-            if (DEBUG) Log.d(LOG_TAG_SCHEDULER, "Job $tag already running check")
+            Logger.d(LOG_TAG_SCHEDULER, "Job $tag already running check")
             return try {
                 var running = false
                 val workInfos = statuses.get()
@@ -60,13 +59,13 @@ class WorkScheduler(val context: Context) {
                 for (workStatus in workInfos) {
                     running = workStatus.state == WorkInfo.State.RUNNING
                 }
-                Log.i(LOG_TAG_SCHEDULER, "Job $tag already running? $running")
+                Logger.i(LOG_TAG_SCHEDULER, "Job $tag already running? $running")
                 running
             } catch (e: ExecutionException) {
-                Log.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
+                Logger.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
                 false
             } catch (e: InterruptedException) {
-                Log.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
+                Logger.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
                 false
             }
         }
@@ -76,7 +75,7 @@ class WorkScheduler(val context: Context) {
         fun isWorkScheduled(context: Context, tag: String): Boolean {
             val instance = WorkManager.getInstance(context)
             val statuses: ListenableFuture<List<WorkInfo>> = instance.getWorkInfosByTag(tag)
-            if (DEBUG) Log.d(LOG_TAG_SCHEDULER, "Job $tag already scheduled check")
+            Logger.d(LOG_TAG_SCHEDULER, "Job $tag already scheduled check")
             return try {
                 var running = false
                 val workInfos = statuses.get()
@@ -88,13 +87,13 @@ class WorkScheduler(val context: Context) {
                         workStatus.state == WorkInfo.State.RUNNING ||
                             workStatus.state == WorkInfo.State.ENQUEUED
                 }
-                Log.i(LOG_TAG_SCHEDULER, "Job $tag already scheduled? $running")
+                Logger.i(LOG_TAG_SCHEDULER, "Job $tag already scheduled? $running")
                 running
             } catch (e: ExecutionException) {
-                Log.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
+                Logger.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
                 false
             } catch (e: InterruptedException) {
-                Log.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
+                Logger.e(LOG_TAG_SCHEDULER, "error on status check ${e.message}", e)
                 false
             }
         }
@@ -102,15 +101,13 @@ class WorkScheduler(val context: Context) {
 
     // Schedule AppExitInfo every APP_EXIT_INFO_JOB_TIME_INTERVAL_DAYS
     fun scheduleAppExitInfoCollectionJob() {
-        if (isWorkScheduled(context.applicationContext, APP_EXIT_INFO_JOB_TAG)) return
-
         // app exit info is supported from R+
         if (!Utilities.isAtleastR()) return
 
-        if (DEBUG) Log.d(LOG_TAG_SCHEDULER, "App exit info job scheduled")
-        val appExitInfoCollector =
+        Logger.d(LOG_TAG_SCHEDULER, "App exit info job scheduled")
+        val bugReportCollector =
             PeriodicWorkRequest.Builder(
-                    AppExitInfoCollector::class.java,
+                    BugReportCollector::class.java,
                     APP_EXIT_INFO_JOB_TIME_INTERVAL_DAYS,
                     TimeUnit.DAYS
                 )
@@ -119,37 +116,34 @@ class WorkScheduler(val context: Context) {
         WorkManager.getInstance(context.applicationContext)
             .enqueueUniquePeriodicWork(
                 APP_EXIT_INFO_JOB_TAG,
-                ExistingPeriodicWorkPolicy.KEEP,
-                appExitInfoCollector
+                ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE,
+                bugReportCollector
             )
     }
 
     fun schedulePurgeConnectionsLog() {
-        if (isWorkScheduled(context.applicationContext, PURGE_CONNECTION_LOGS_JOB_TAG)) return
-
         val purgeLogs =
             PeriodicWorkRequest.Builder(
                     PurgeConnectionLogs::class.java,
-                    PURGE_LOGS_TIME_INTERVAL_DAYS,
-                    TimeUnit.DAYS
+                    PURGE_LOGS_TIME_INTERVAL_HOURS,
+                    TimeUnit.HOURS
                 )
                 .addTag(PURGE_CONNECTION_LOGS_JOB_TAG)
                 .build()
 
+        Logger.d(LOG_TAG_SCHEDULER, "purge connection logs job scheduled")
         WorkManager.getInstance(context.applicationContext)
             .enqueueUniquePeriodicWork(
                 PURGE_CONNECTION_LOGS_JOB_TAG,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE,
                 purgeLogs
             )
     }
 
     // Schedule AppExitInfo on demand
     fun scheduleOneTimeWorkForAppExitInfo() {
-        if (isWorkRunning(context.applicationContext, APP_EXIT_INFO_JOB_TAG)) return
-
-        val appExitInfoCollector =
-            OneTimeWorkRequestBuilder<AppExitInfoCollector>()
+        val bugReportCollector =
+            OneTimeWorkRequestBuilder<BugReportCollector>()
                 .setBackoffCriteria(
                     BackoffPolicy.LINEAR,
                     WorkRequest.MIN_BACKOFF_MILLIS,
@@ -161,16 +155,16 @@ class WorkScheduler(val context: Context) {
             .beginUniqueWork(
                 APP_EXIT_INFO_ONE_TIME_JOB_TAG,
                 ExistingWorkPolicy.REPLACE,
-                appExitInfoCollector
+                bugReportCollector
             )
             .enqueue()
     }
 
     // schedule blocklist update check (based on user settings)
     fun scheduleBlocklistUpdateCheckJob() {
-        if (isWorkScheduled(context.applicationContext, BLOCKLIST_UPDATE_CHECK_JOB_TAG)) return
+        // if (isWorkScheduled(context.applicationContext, BLOCKLIST_UPDATE_CHECK_JOB_TAG)) return
 
-        Log.i(LOG_TAG_SCHEDULER, "Scheduled blocklist update check")
+        Logger.i(LOG_TAG_SCHEDULER, "Scheduled blocklist update check")
         val blocklistUpdateCheck =
             PeriodicWorkRequest.Builder(
                     BlocklistUpdateCheckJob::class.java,
@@ -182,16 +176,13 @@ class WorkScheduler(val context: Context) {
         WorkManager.getInstance(context.applicationContext)
             .enqueueUniquePeriodicWork(
                 BLOCKLIST_UPDATE_CHECK_JOB_TAG,
-                ExistingPeriodicWorkPolicy.UPDATE,
+                ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE,
                 blocklistUpdateCheck
             )
     }
 
     fun scheduleDataUsageJob() {
-        Log.i(LOG_TAG_SCHEDULER, "Data usage job schedule started")
-        if (isWorkScheduled(context.applicationContext, DATA_USAGE_JOB_TAG)) return
-
-        Log.i(LOG_TAG_SCHEDULER, "Data usage job scheduled")
+        Logger.i(LOG_TAG_SCHEDULER, "Data usage job scheduled")
         val workRequest =
             PeriodicWorkRequest.Builder(
                     DataUsageUpdater::class.java,

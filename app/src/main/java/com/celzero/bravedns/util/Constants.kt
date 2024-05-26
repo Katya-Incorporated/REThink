@@ -49,6 +49,8 @@ class Constants {
         const val ONDEVICE_BLOCKLIST_UPDATE_CHECK_QUERYPART_1 = "update"
         const val ONDEVICE_BLOCKLIST_UPDATE_CHECK_QUERYPART_2 = "blocklists"
 
+        const val RETHINK_PACKAGE = "com.celzero.bravedns"
+
         // url to check to check the if there is update available for on-device blocklist
         const val ONDEVICE_IPDB_UPDATE_CHECK_URL =
             "$DOWNLOAD_BASE_URL/update/geoip?$RETHINK_BLOCKLIST_CONFIGURE_URL_PARAMETER"
@@ -127,8 +129,8 @@ class Constants {
 
         const val RETHINK_SEARCH_URL = "https://rethinkdns.com/search?s="
 
-        // default filetag.json for remote blocklist (stored in assets folder) (v055)
-        const val PACKAGED_REMOTE_FILETAG_TIMESTAMP: Long = 1690926960536
+        // default filetag.json for remote blocklist (stored in assets folder) (v055i)
+        const val PACKAGED_REMOTE_FILETAG_TIMESTAMP: Long = 1713995763912
 
         // rethinkdns sponsor link
         const val RETHINKDNS_SPONSOR_LINK = "https://svc.rethinkdns.com/r/sponsor"
@@ -151,6 +153,9 @@ class Constants {
         // invalid application uid
         const val INVALID_UID = -1
 
+        // android primary user
+        const val PRIMARY_USER = 0
+
         // missing uid, used when the uid is undermined. see ConnectionTracer#getUidQ()
         // changing this requires changes in RethinkDnsEndpointDao file
         const val MISSING_UID = -2000
@@ -165,16 +170,19 @@ class Constants {
         const val SEARCH_QUERY = "search_query"
 
         // default custom http proxy port number
-        const val HTTP_PROXY_PORT = "8118"
+        const val HTTP_PROXY_PORT = 8118
 
         // default custom socks5 ip
         const val SOCKS_DEFAULT_IP = "127.0.0.1"
 
         // default custom socks5 port
-        const val SOCKS_DEFAULT_PORT = "9050"
+        const val SOCKS_DEFAULT_PORT = 9050
 
         // constants to send type of proxy: for socks5
         const val SOCKS = "Socks5"
+
+        // constants to send type of proxy: for http
+        const val HTTP = "HTTP"
 
         // data-time format used as part of network log adapter
         const val DATE_FORMAT_PATTERN = "HH:mm:ss"
@@ -278,11 +286,12 @@ class Constants {
         const val BLOCK_FREE_DNS_MAX = "https://max.rethinkdns.com/dns-query"
         const val BLOCK_FREE_DNS_SKY = "https://sky.rethinkdns.com/dns-query"
 
+        // all fallback dns servers should have the corresponding ip address in servers.xml
         val DEFAULT_DNS_LIST =
             listOf(
                 DefaultDnsServer(0, "None", "", "None"),
                 DefaultDnsServer(1, "Rethink", "https://zero.rethinkdns.com/dns-query", "DoH"),
-                DefaultDnsServer(2, "Google", "https://dns.google.com/dns-query", "DoH"),
+                DefaultDnsServer(2, "Google", "https://dns.google/dns-query", "DoH"),
                 DefaultDnsServer(3, "Cloudflare", "https://cloudflare-dns.com/dns-query", "DoH")
             )
 
@@ -290,7 +299,7 @@ class Constants {
         const val PCAP_FOLDER_NAME = "Rethink"
 
         // pcap file name
-        const val PCAP_FILE_NAME_PART = "Rethink_PCAP_"
+        const val PCAP_FILE_NAME_PART = "rethink_pcap_"
 
         // pcap file extension
         const val PCAP_FILE_EXTENSION = ".pcap"
@@ -300,5 +309,15 @@ class Constants {
 
         // wireguard folder name
         const val WIREGUARD_FOLDER_NAME = "wireguard"
+
+        val DEFAULT_RDNS_REMOTE_DNS_NAMES =
+            listOf(
+                "RDNS Default",
+                "RDNS Adult",
+                "RDNS Piracy",
+                "RDNS Social Media",
+                "RDNS Security",
+                "RDNS Privacy"
+            )
     }
 }

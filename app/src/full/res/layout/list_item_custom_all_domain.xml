@@ -5,6 +5,12 @@
     android:layout_height="wrap_content"
     android:layout_marginBottom="1dp">
 
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:alpha="0.2"
+        android:background="?attr/primaryLightColorText" />
+
     <LinearLayout
         android:id="@+id/custom_domain_app_name_container"
         android:layout_width="match_parent"
@@ -125,7 +131,7 @@
             android:tag="0"
             android:text="@string/ci_no_rule"
             android:textColor="?attr/primaryTextColor"
-            android:textSize="@dimen/small_font_subheading_text" />
+            android:textSize="@dimen/mini_font_text_view" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/custom_domain_tg_block"
@@ -136,7 +142,7 @@
             android:tag="1"
             android:text="@string/ci_block"
             android:textColor="?attr/primaryTextColor"
-            android:textSize="@dimen/small_font_subheading_text" />
+            android:textSize="@dimen/mini_font_text_view" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/custom_domain_tg_whitelist"
@@ -147,7 +153,7 @@
             android:tag="2"
             android:text="@string/ci_trust_rule"
             android:textColor="?attr/primaryTextColor"
-            android:textSize="@dimen/small_font_subheading_text" />
+            android:textSize="@dimen/mini_font_text_view" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/custom_domain_tg_delete"
@@ -156,9 +162,9 @@
             android:layout_height="wrap_content"
             android:minWidth="5dp"
             android:tag="3"
-            android:text="delete"
+            android:text="@string/lbl_delete"
             android:textColor="?attr/primaryTextColor"
-            android:textSize="@dimen/small_font_subheading_text" />
+            android:textSize="@dimen/mini_font_text_view" />
 
     </com.google.android.material.button.MaterialButtonToggleGroup>
 

@@ -22,7 +22,6 @@ object DatabaseModule {
     private val databaseModule = module {
         single { AppDatabase.buildDatabase(androidContext()) }
         single { LogDatabase.buildDatabase(androidContext()) }
-        single { RefreshDatabase(androidContext(), get(), get(), get()) }
     }
     private val daoModule = module {
         single { get<AppDatabase>().appInfoDAO() }
@@ -43,6 +42,9 @@ object DatabaseModule {
         single { get<AppDatabase>().wgConfigFilesDAO() }
         single { get<AppDatabase>().wgApplicationMappingDao() }
         single { get<AppDatabase>().tcpProxyEndpointDao() }
+        single { get<AppDatabase>().dotEndpointDao() }
+        single { get<AppDatabase>().odohEndpointDao() }
+        single { get<LogDatabase>().rethinkConnectionLogDAO() }
     }
     private val repositoryModule = module {
         single { get<AppDatabase>().appInfoRepository() }
@@ -63,6 +65,9 @@ object DatabaseModule {
         single { get<AppDatabase>().wgConfigFilesRepository() }
         single { get<AppDatabase>().wgApplicationMappingRepository() }
         single { get<AppDatabase>().tcpProxyEndpointRepository() }
+        single { get<AppDatabase>().dotEndpointRepository() }
+        single { get<AppDatabase>().odohEndpointRepository() }
+        single { get<LogDatabase>().rethinkConnectionLogRepository() }
     }
 
     val modules = listOf(databaseModule, daoModule, repositoryModule)

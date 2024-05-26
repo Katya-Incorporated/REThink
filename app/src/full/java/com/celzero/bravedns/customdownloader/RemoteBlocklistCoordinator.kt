@@ -15,16 +15,16 @@
  */
 package com.celzero.bravedns.customdownloader
 
+import Logger
+import Logger.LOG_TAG_DOWNLOAD
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.celzero.bravedns.download.BlocklistDownloadHelper
 import com.celzero.bravedns.service.PersistentState
 import com.celzero.bravedns.service.RethinkBlocklistManager
 import com.celzero.bravedns.util.Constants
-import com.celzero.bravedns.util.LoggerConstants
 import com.celzero.bravedns.util.RemoteFileTagUtil
 import com.celzero.bravedns.util.Utilities
 import com.google.gson.JsonObject
@@ -47,6 +47,7 @@ class RemoteBlocklistCoordinator(val context: Context, workerParams: WorkerParam
     }
 
     override suspend fun doWork(): Result {
+        Logger.i(LOG_TAG_DOWNLOAD, "Remote blocklist download worker started")
         try {
             val startTime = inputData.getLong("workerStartTime", 0)
             val timestamp = inputData.getLong("blocklistTimestamp", 0)
@@ -80,8 +81,8 @@ class RemoteBlocklistCoordinator(val context: Context, workerParams: WorkerParam
                 }
             }
         } catch (ex: CancellationException) {
-            Log.e(
-                LoggerConstants.LOG_TAG_DOWNLOAD,
+            Logger.e(
+                LOG_TAG_DOWNLOAD,
                 "Local blocklist download, received cancellation exception: ${ex.message}",
                 ex
             )
@@ -89,36 +90,43 @@ class RemoteBlocklistCoordinator(val context: Context, workerParams: WorkerParam
         return Result.failure()
     }
 
-    private suspend fun downloadRemoteBlocklist(timestamp: Long): Boolean {
-        Log.i(LoggerConstants.LOG_TAG_DOWNLOAD, "Download remote blocklist: $timestamp")
+    private suspend fun downloadRemoteBlocklist(timestamp: Long, retryCount: Int = 0): Boolean {
+        Logger.i(LOG_TAG_DOWNLOAD, "Download remote blocklist: $timestamp")
+        try {
+            val retrofit =
+                RetrofitManager.getBlocklistBaseBuilder(retryCount)
+                    .addConverterFactory(GsonConverterFactory.create())
+                    .build()
+            val retrofitInterface = retrofit.create(IBlocklistDownload::class.java)
+            val response =
+                retrofitInterface.downloadRemoteBlocklistFile(
+                    Constants.FILETAG_TEMP_DOWNLOAD_URL,
+                    persistentState.appVersion,
+                    ""
+                )
 
-        val retrofit =
-            RetrofitManager.getBlocklistBaseBuilder(RetrofitManager.Companion.OkHttpDnsType.DEFAULT)
-                .addConverterFactory(GsonConverterFactory.create())
-                .build()
-        val retrofitInterface = retrofit.create(IBlocklistDownload::class.java)
-        val response =
-            retrofitInterface.downloadRemoteBlocklistFile(
-                Constants.FILETAG_TEMP_DOWNLOAD_URL,
-                persistentState.appVersion,
-                ""
+            Logger.i(
+                LOG_TAG_DOWNLOAD,
+                "response rcvd for remote blocklist, res: ${response?.isSuccessful}"
             )
 
-        Log.i(
-            LoggerConstants.LOG_TAG_DOWNLOAD,
-            "Response received on remote blocklist request: ${response?.isSuccessful}"
-        )
-
-        return if (response?.isSuccessful == true) {
-            val isDownloadSuccess = saveRemoteFile(response.body(), timestamp)
-            isDownloadSuccess
+            if (response?.isSuccessful == true) {
+                return saveRemoteFile(response.body(), timestamp)
+            }
+        } catch (ex: Exception) {
+            Logger.e(LOG_TAG_DOWNLOAD, "err in downloadRemoteBlocklist: ${ex.message}", ex)
+        }
+        return if (isRetryRequired(retryCount)) {
+            Logger.i(LOG_TAG_DOWNLOAD, "retrying the downloadRemoteBlocklist")
+            downloadRemoteBlocklist(timestamp, retryCount + 1)
         } else {
-            Log.i(
-                LoggerConstants.LOG_TAG_DOWNLOAD,
-                "Remote blocklist download failure, call? ${response?.body()}, response: $response "
-            )
+            Logger.i(LOG_TAG_DOWNLOAD, "retry count exceeded, returning null")
             false
         }
+    }
+
+    private fun isRetryRequired(retryCount: Int): Boolean {
+        return retryCount < RetrofitManager.Companion.OkHttpDnsType.entries.size - 1
     }
 
     private suspend fun saveRemoteFile(jsonObject: JsonObject?, timestamp: Long): Boolean {
@@ -134,11 +142,7 @@ class RemoteBlocklistCoordinator(val context: Context, workerParams: WorkerParam
                 timestamp
             )
         } catch (e: IOException) {
-            Log.w(
-                LoggerConstants.LOG_TAG_DOWNLOAD,
-                "could not create filetag.json at version $timestamp",
-                e
-            )
+            Logger.w(LOG_TAG_DOWNLOAD, "could not create filetag.json at version $timestamp", e)
         }
         return false
     }
@@ -150,8 +154,7 @@ class RemoteBlocklistCoordinator(val context: Context, workerParams: WorkerParam
                     context,
                     Constants.REMOTE_BLOCKLIST_DOWNLOAD_FOLDER_NAME,
                     timestamp
-                )
-                    ?: return null
+                ) ?: return null
 
             if (!dir.exists()) {
                 dir.mkdirs()
@@ -162,9 +165,9 @@ class RemoteBlocklistCoordinator(val context: Context, workerParams: WorkerParam
             }
             return filePath
         } catch (e: IOException) {
-            Log.e(
-                LoggerConstants.LOG_TAG_DOWNLOAD,
-                "Could not create remote blocklist folder/file: $timestamp" + e.message,
+            Logger.e(
+                LOG_TAG_DOWNLOAD,
+                "err creating remote blocklist, ts: $timestamp" + e.message,
                 e
             )
         }

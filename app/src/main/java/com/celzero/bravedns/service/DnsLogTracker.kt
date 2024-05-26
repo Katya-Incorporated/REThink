@@ -18,6 +18,7 @@ package com.celzero.bravedns.service
 
 import android.content.Context
 import android.os.SystemClock
+import backend.Backend
 import com.celzero.bravedns.R
 import com.celzero.bravedns.database.DnsLog
 import com.celzero.bravedns.database.DnsLogRepository
@@ -30,7 +31,6 @@ import com.celzero.bravedns.util.Utilities.getCountryCode
 import com.celzero.bravedns.util.Utilities.getFlag
 import com.celzero.bravedns.util.Utilities.makeAddressPair
 import com.celzero.bravedns.util.Utilities.normalizeIp
-import dnsx.Summary
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -49,10 +49,9 @@ internal constructor(
         // for eg: https://support.mozilla.org/en-US/questions/1213045
         val DNS_TTL_GRACE_SEC = TimeUnit.MINUTES.toSeconds(5L)
         private const val RDATA_MAX_LENGTH = 100
+        private const val EMPTY_RESPONSE = "--"
     }
 
-    private var numRequests: Long = 0
-    private var numBlockedRequests: Long = 0
     private val vpnStateMap = HashMap<Transaction.Status, BraveVPNService.State>()
 
     init {
@@ -61,11 +60,12 @@ internal constructor(
         vpnStateMap[Transaction.Status.NO_RESPONSE] = BraveVPNService.State.DNS_SERVER_DOWN
         vpnStateMap[Transaction.Status.TRANSPORT_ERROR] = BraveVPNService.State.DNS_SERVER_DOWN
         vpnStateMap[Transaction.Status.BAD_QUERY] = BraveVPNService.State.DNS_ERROR
+        vpnStateMap[Transaction.Status.CLIENT_ERROR] = BraveVPNService.State.DNS_ERROR
         vpnStateMap[Transaction.Status.BAD_RESPONSE] = BraveVPNService.State.DNS_ERROR
         vpnStateMap[Transaction.Status.INTERNAL_ERROR] = BraveVPNService.State.APP_ERROR
     }
 
-    fun processOnResponse(summary: Summary): Transaction {
+    fun processOnResponse(summary: backend.DNSSummary): Transaction {
         val latencyMs = (TimeUnit.SECONDS.toMillis(1L) * summary.latency).toLong()
         val nowMs = SystemClock.elapsedRealtime()
         val queryTimeMs = nowMs - latencyMs
@@ -83,6 +83,8 @@ internal constructor(
         transaction.responseCalendar = Calendar.getInstance()
         transaction.blocklist = summary.blocklists ?: ""
         transaction.relayName = summary.relayServer ?: ""
+        transaction.msg = summary.msg ?: ""
+        transaction.upstreamBlock = summary.upstreamBlocks
         return transaction
     }
 
@@ -91,12 +93,7 @@ internal constructor(
 
         dnsLog.blockLists = transaction.blocklist
         dnsLog.resolverId = transaction.id
-        if (transaction.transportType.isDnsCrypt()) {
-            dnsLog.relayIP = transaction.relayName
-        } else {
-            // fixme: handle for DoH and Dns proxy
-            dnsLog.relayIP = ""
-        }
+        dnsLog.relayIP = transaction.relayName
         dnsLog.dnsType = transaction.transportType.ordinal
         dnsLog.latency = transaction.responseTime
         dnsLog.queryStr = transaction.name
@@ -104,6 +101,8 @@ internal constructor(
         dnsLog.serverIP = transaction.serverName
         dnsLog.status = transaction.status.name
         dnsLog.time = transaction.responseCalendar.timeInMillis
+        dnsLog.msg = transaction.msg
+        dnsLog.upstreamBlock = transaction.upstreamBlock
         val typeName = ResourceRecordTypes.getTypeName(transaction.type.toInt())
         if (typeName == ResourceRecordTypes.UNKNOWN) {
             dnsLog.typeName = transaction.type.toString()
@@ -112,6 +111,12 @@ internal constructor(
         }
 
         dnsLog.resolver = transaction.serverName
+
+        // mark the query as blocked if the transaction id is Dnsx.BlockAll, no need to check
+        // for blocklist as it is already marked as blocked
+        if (transaction.id == Backend.BlockAll) {
+            dnsLog.isBlocked = true
+        }
 
         if (transaction.status === Transaction.Status.COMPLETE) {
 
@@ -143,8 +148,13 @@ internal constructor(
                     if (transaction.response.isNotEmpty()) {
                         dnsLog.response = transaction.response.take(RDATA_MAX_LENGTH)
                     }
-                    // if the response is empty and blocklist is not empty, then mark it as blocked
-                    if (transaction.blocklist.isNotEmpty()) {
+                    // there is no empty response, instead -- is added as response from go,
+                    // there are cases where the response so check for empty response as well
+                    if (
+                        (transaction.response.isEmpty() ||
+                            transaction.response == EMPTY_RESPONSE) &&
+                            (transaction.blocklist.isNotEmpty() || transaction.upstreamBlock)
+                    ) {
                         dnsLog.isBlocked = true
                     }
                 }

@@ -19,6 +19,18 @@ import androidx.room.Entity
 import androidx.room.Ignore
 import androidx.room.PrimaryKey
 
+data class WgConfigFilesImmutable(
+    val id: Int,
+    val name: String,
+    val configPath: String,
+    val serverResponse: String,
+    val isActive: Boolean,
+    val isCatchAll: Boolean,
+    val isLockdown: Boolean,
+    val oneWireGuard: Boolean,
+    val isDeletable: Boolean
+)
+
 @Entity(tableName = "WgConfigFiles")
 class WgConfigFiles {
     @PrimaryKey(autoGenerate = true) var id: Int = 0
@@ -26,6 +38,9 @@ class WgConfigFiles {
     var configPath: String = ""
     var serverResponse: String = ""
     var isActive: Boolean = false
+    var isCatchAll: Boolean = false
+    var isLockdown: Boolean = false
+    var oneWireGuard: Boolean = false
     var isDeletable: Boolean = true
 
     override fun equals(other: Any?): Boolean {
@@ -44,19 +59,67 @@ class WgConfigFiles {
         name: String,
         configPath: String,
         serverResponse: String,
-        isActive: Boolean
+        isActive: Boolean,
+        isCatchAll: Boolean,
+        isLockdown: Boolean,
+        oneWireGuard: Boolean
     ) {
         this.id = id
         this.name = name
         this.configPath = configPath
         this.serverResponse = serverResponse
         this.isActive = isActive
+        this.isCatchAll = isCatchAll
+        this.isLockdown = isLockdown
+        this.oneWireGuard = oneWireGuard
     }
 
-    constructor(name: String, configPath: String, serverResponse: String, isActive: Boolean) {
+    constructor(
+        name: String,
+        configPath: String,
+        serverResponse: String,
+        isActive: Boolean,
+        isCatchAll: Boolean,
+        isLockdown: Boolean,
+        oneWireGuard: Boolean,
+        isDeletable: Boolean
+    ) {
         this.name = name
         this.configPath = configPath
         this.serverResponse = serverResponse
         this.isActive = isActive
+        this.isCatchAll = isCatchAll
+        this.isLockdown = isLockdown
+        this.oneWireGuard = oneWireGuard
+        this.isDeletable = isDeletable
+    }
+
+    fun toImmutable(): WgConfigFilesImmutable {
+        return WgConfigFilesImmutable(
+            id,
+            name,
+            configPath,
+            serverResponse,
+            isActive,
+            isCatchAll,
+            isLockdown,
+            oneWireGuard,
+            isDeletable
+        )
+    }
+
+    companion object {
+        fun fromImmutable(data: WgConfigFilesImmutable): WgConfigFiles {
+            return WgConfigFiles(
+                data.id,
+                data.name,
+                data.configPath,
+                data.serverResponse,
+                data.isActive,
+                data.isCatchAll,
+                data.isLockdown,
+                data.oneWireGuard
+            )
+        }
     }
 }

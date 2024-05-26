@@ -16,45 +16,48 @@
 
 package com.celzero.bravedns.adapter
 
+import Logger
+import Logger.LOG_TAG_DNS
 import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.paging.PagingDataAdapter
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+import backend.Backend
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.data.AppConfig
 import com.celzero.bravedns.database.RethinkDnsEndpoint
 import com.celzero.bravedns.databinding.RethinkEndpointListItemBinding
 import com.celzero.bravedns.service.RethinkBlocklistManager
-import com.celzero.bravedns.ui.ConfigureRethinkBasicActivity
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_DNS
+import com.celzero.bravedns.service.VpnController
+import com.celzero.bravedns.ui.activity.ConfigureRethinkBasicActivity
 import com.celzero.bravedns.util.UIUtils
 import com.celzero.bravedns.util.UIUtils.clipboardCopy
 import com.celzero.bravedns.util.Utilities
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class RethinkEndpointAdapter(
-    private val context: Context,
-    private val lifecycleOwner: LifecycleOwner,
-    private val appConfig: AppConfig
-) :
+class RethinkEndpointAdapter(private val context: Context, private val appConfig: AppConfig) :
     PagingDataAdapter<RethinkDnsEndpoint, RethinkEndpointAdapter.RethinkEndpointViewHolder>(
         DIFF_CALLBACK
     ) {
 
+    var lifecycleOwner: LifecycleOwner? = null
+
     companion object {
+        private const val ONE_SEC = 1000L
         private val DIFF_CALLBACK =
             object : DiffUtil.ItemCallback<RethinkDnsEndpoint>() {
                 override fun areItemsTheSame(
@@ -82,6 +85,7 @@ class RethinkEndpointAdapter(
                 parent,
                 false
             )
+        lifecycleOwner = parent.findViewTreeLifecycleOwner()
         return RethinkEndpointViewHolder(itemBinding)
     }
 
@@ -92,6 +96,7 @@ class RethinkEndpointAdapter(
 
     inner class RethinkEndpointViewHolder(private val b: RethinkEndpointListItemBinding) :
         RecyclerView.ViewHolder(b.root) {
+        private var statusCheckJob: Job? = null
 
         fun update(endpoint: RethinkDnsEndpoint) {
             displayDetails(endpoint)
@@ -106,25 +111,45 @@ class RethinkEndpointAdapter(
 
         private fun displayDetails(endpoint: RethinkDnsEndpoint) {
             b.rethinkEndpointListUrlName.text = endpoint.name
-            b.rethinkEndpointListUrlExplanation.text = ""
             b.rethinkEndpointListCheckImage.isChecked = endpoint.isActive
-            Log.i(
-                LOG_TAG_DNS,
-                "connected to rethink endpoint: ${endpoint.name} isSelected? ${endpoint.isActive}"
-            )
 
             // Shows either the info/delete icon for the DoH entries.
             showIcon(endpoint)
 
-            updateBlocklistStatusText(endpoint)
+            if (endpoint.isActive && VpnController.hasTunnel()) {
+                keepSelectedStatusUpdated(endpoint)
+            } else if (endpoint.isActive) {
+                b.rethinkEndpointListUrlExplanation.text =
+                    context.getString(R.string.rt_filter_parent_selected)
+            } else {
+                b.rethinkEndpointListUrlExplanation.text = ""
+            }
+        }
+
+        private fun keepSelectedStatusUpdated(endpoint: RethinkDnsEndpoint) {
+            statusCheckJob = ui {
+                while (true) {
+                    updateBlocklistStatusText(endpoint)
+                    delay(ONE_SEC)
+                }
+            }
         }
 
         private fun updateBlocklistStatusText(endpoint: RethinkDnsEndpoint) {
-            if (!endpoint.isActive) return
+            // if the view is not active then cancel the job
+            if (
+                lifecycleOwner
+                    ?.lifecycle
+                    ?.currentState
+                    ?.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) == false ||
+                    bindingAdapterPosition == RecyclerView.NO_POSITION
+            ) {
+                statusCheckJob?.cancel()
+                return
+            }
 
-            // show blocklist count and status as connected if endpoint is active
-            val status = UIUtils.getDnsStatus()
-
+            val state = VpnController.getDnsStatus(Backend.Preferred)
+            val status = UIUtils.getDnsStatusStringRes(state)
             // show the status as it is if it is not connected
             if (status != R.string.dns_connected) {
                 b.rethinkEndpointListUrlExplanation.text =
@@ -156,11 +181,10 @@ class RethinkEndpointAdapter(
         }
 
         private fun updateConnection(endpoint: RethinkDnsEndpoint) {
-            if (DEBUG)
-                Log.d(
-                    LOG_TAG_DNS,
-                    "on rethink dns change - ${endpoint.name}, ${endpoint.url}, ${endpoint.isActive}"
-                )
+            Logger.d(
+                LOG_TAG_DNS,
+                "on rethink dns change - ${endpoint.name}, ${endpoint.url}, ${endpoint.isActive}"
+            )
 
             io {
                 endpoint.isActive = true
@@ -204,6 +228,16 @@ class RethinkEndpointAdapter(
         }
 
         private fun openEditConfiguration(endpoint: RethinkDnsEndpoint) {
+
+            if (!VpnController.hasTunnel()) {
+                Utilities.showToastUiCentered(
+                    context,
+                    context.getString(R.string.ssv_toast_start_rethink),
+                    Toast.LENGTH_SHORT
+                )
+                return
+            }
+
             val intent = Intent(context, ConfigureRethinkBasicActivity::class.java)
             intent.putExtra(
                 ConfigureRethinkBasicActivity.RETHINK_BLOCKLIST_TYPE,
@@ -214,8 +248,12 @@ class RethinkEndpointAdapter(
             context.startActivity(intent)
         }
 
+        private fun ui(f: suspend () -> Unit): Job? {
+            return lifecycleOwner?.lifecycleScope?.launch { withContext(Dispatchers.Main) { f() } }
+        }
+
         private fun io(f: suspend () -> Unit) {
-            lifecycleOwner.lifecycleScope.launch { withContext(Dispatchers.IO) { f() } }
+            lifecycleOwner?.lifecycleScope?.launch { withContext(Dispatchers.IO) { f() } }
         }
     }
 }

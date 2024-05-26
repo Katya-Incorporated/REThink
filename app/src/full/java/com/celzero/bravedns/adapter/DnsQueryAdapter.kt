@@ -16,10 +16,12 @@ limitations under the License.
 
 package com.celzero.bravedns.adapter
 
+import Logger
+import Logger.LOG_TAG_DNS
+import Logger.LOG_TAG_UI
 import android.content.Context
 import android.graphics.drawable.Drawable
 import android.os.Bundle
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -33,17 +35,13 @@ import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions.withCrossFade
 import com.bumptech.glide.request.target.CustomViewTarget
-import com.bumptech.glide.request.target.Target.SIZE_ORIGINAL
 import com.bumptech.glide.request.transition.DrawableCrossFadeFactory
 import com.bumptech.glide.request.transition.Transition
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.database.DnsLog
 import com.celzero.bravedns.databinding.TransactionRowBinding
 import com.celzero.bravedns.glide.FavIconDownloader
-import com.celzero.bravedns.ui.DnsBlocklistBottomSheetFragment
-import com.celzero.bravedns.util.LoggerConstants
-import com.celzero.bravedns.util.LoggerConstants.Companion.LOG_TAG_DNS_LOG
+import com.celzero.bravedns.ui.bottomsheet.DnsBlocklistBottomSheet
 import com.celzero.bravedns.util.UIUtils.fetchColor
 import com.google.gson.Gson
 
@@ -100,18 +98,24 @@ class DnsQueryAdapter(val context: Context, val loadFavIcon: Boolean) :
         }
 
         private fun displayLogEntryHint(dnsLog: DnsLog) {
+            // TODO: make the entry as maybe blocked if there is a universal rule blocking the
+            // domain / ip
             if (dnsLog.isBlocked) {
                 b.queryLogIndicator.visibility = View.VISIBLE
                 b.queryLogIndicator.setBackgroundColor(
                     ContextCompat.getColor(context, R.color.colorRed_A400)
                 )
-            } else if (dnsLog.blockLists.isNotEmpty()) {
+            } else if (determineMaybeBlocked(dnsLog)) {
                 b.queryLogIndicator.visibility = View.VISIBLE
                 val color = fetchColor(context, R.attr.chipTextNeutral)
                 b.queryLogIndicator.setBackgroundColor(color)
             } else {
                 b.queryLogIndicator.visibility = View.INVISIBLE
             }
+        }
+
+        private fun determineMaybeBlocked(dnsLog: DnsLog): Boolean {
+            return dnsLog.upstreamBlock || dnsLog.blockLists.isNotEmpty()
         }
 
         private fun displayIcon(dnsLog: DnsLog) {
@@ -152,19 +156,16 @@ class DnsQueryAdapter(val context: Context, val loadFavIcon: Boolean) :
 
         private fun openBottomSheet(dnsLog: DnsLog) {
             if (context !is FragmentActivity) {
-                Log.wtf(
-                    LoggerConstants.LOG_TAG_UI,
+                Logger.w(
+                    LOG_TAG_UI,
                     "Can not open bottom sheet. Context is not attached to activity"
                 )
                 return
             }
 
-            val bottomSheetFragment = DnsBlocklistBottomSheetFragment()
+            val bottomSheetFragment = DnsBlocklistBottomSheet()
             val bundle = Bundle()
-            bundle.putString(
-                DnsBlocklistBottomSheetFragment.INSTANCE_STATE_DNSLOGS,
-                Gson().toJson(dnsLog)
-            )
+            bundle.putString(DnsBlocklistBottomSheet.INSTANCE_STATE_DNSLOGS, Gson().toJson(dnsLog))
             bottomSheetFragment.arguments = bundle
             bottomSheetFragment.show(context.supportFragmentManager, bottomSheetFragment.tag)
         }
@@ -182,8 +183,7 @@ class DnsQueryAdapter(val context: Context, val loadFavIcon: Boolean) :
                 Glide.with(context.applicationContext)
                     .load(nextDnsUrl)
                     .onlyRetrieveFromCache(true)
-                    .diskCacheStrategy(DiskCacheStrategy.DATA)
-                    .override(SIZE_ORIGINAL, SIZE_ORIGINAL)
+                    .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                     .error(
                         // on error, check if the icon is stored in the name of duckduckgo url
                         displayDuckduckgoFavIcon(duckduckGoUrl, duckduckgoDomainURL)
@@ -211,7 +211,7 @@ class DnsQueryAdapter(val context: Context, val loadFavIcon: Boolean) :
                         }
                     )
             } catch (e: Exception) {
-                if (DEBUG) Log.d(LOG_TAG_DNS_LOG, "Error loading icon, load flag instead")
+                Logger.d(LOG_TAG_DNS, "Error loading icon, load flag instead")
                 displayDuckduckgoFavIcon(duckduckGoUrl, duckduckgoDomainURL)
             }
         }
@@ -229,8 +229,7 @@ class DnsQueryAdapter(val context: Context, val loadFavIcon: Boolean) :
                 Glide.with(context.applicationContext)
                     .load(url)
                     .onlyRetrieveFromCache(true)
-                    .diskCacheStrategy(DiskCacheStrategy.DATA)
-                    .override(SIZE_ORIGINAL, SIZE_ORIGINAL)
+                    .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                     .error(
                         Glide.with(context.applicationContext)
                             .load(subDomainURL)
@@ -259,7 +258,7 @@ class DnsQueryAdapter(val context: Context, val loadFavIcon: Boolean) :
                         }
                     )
             } catch (e: Exception) {
-                if (DEBUG) Log.d(LOG_TAG_DNS_LOG, "Error loading icon, load flag instead")
+                Logger.d(LOG_TAG_DNS, "Error loading icon, load flag instead")
                 showFlag()
                 hideFavIcon()
             }

@@ -27,6 +27,10 @@ class CustomIpRepository(private val customIpDao: CustomIpDao) {
         customIpDao.insert(customIp)
     }
 
+    suspend fun updateUid(uid: Int, newUid: Int) {
+        customIpDao.updateUid(uid, newUid)
+    }
+
     suspend fun getIpRules(): List<CustomIp> {
         return customIpDao.getCustomIpRules()
     }
@@ -35,19 +39,23 @@ class CustomIpRepository(private val customIpDao: CustomIpDao) {
         return customIpDao.getCustomIpDetail(uid, ipAddress, port)
     }
 
-    suspend fun deleteRule(uid: Int, ipAddress: String, port: Int) {
-        customIpDao.deleteRule(uid, ipAddress, port)
+    suspend fun deleteRule(uid: Int, ipAddress: String, port: Int): Int {
+        return customIpDao.deleteRule(uid, ipAddress, port)
     }
 
     suspend fun deleteRulesByUid(uid: Int) {
         customIpDao.deleteRulesByUid(uid)
     }
 
+    suspend fun getRulesByUid(uid: Int): List<CustomIp> {
+        return customIpDao.getRulesByUid(uid)
+    }
+
     fun getCustomIpsLiveData(): LiveData<Int> {
         return customIpDao.getCustomIpsLiveData()
     }
 
-    fun deleteAllAppsRules() {
+    suspend fun deleteAllAppsRules() {
         customIpDao.deleteAllAppsRules()
     }
 }

@@ -15,6 +15,8 @@
  */
 package com.celzero.bravedns.util
 
+import Logger
+import Logger.LOG_TAG_UI
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -27,83 +29,82 @@ import android.provider.Settings
 import android.text.Html
 import android.text.Spanned
 import android.text.format.DateUtils
-import android.util.Log
 import android.util.TypedValue
 import android.widget.Toast
 import androidx.core.content.getSystemService
 import androidx.core.net.toUri
 import androidx.core.text.HtmlCompat
+import backend.Backend
 import com.celzero.bravedns.R
-import com.celzero.bravedns.RethinkDnsApplication.Companion.DEBUG
 import com.celzero.bravedns.database.DnsLog
 import com.celzero.bravedns.glide.FavIconDownloader
-import com.celzero.bravedns.service.BraveVPNService
+import com.celzero.bravedns.net.doh.Transaction
 import com.celzero.bravedns.service.DnsLogTracker
-import com.celzero.bravedns.service.VpnController
-import ipn.Ipn
 import java.util.Calendar
 import java.util.Date
-import java.util.TimeZone
 import java.util.regex.Matcher
 import java.util.regex.Pattern
 
 object UIUtils {
 
-    fun getDnsStatus(): Int {
-        val status = VpnController.state()
+    fun getDnsStatusStringRes(status: Long?): Int {
+        if (status == null) return R.string.failed_using_default
 
-        return if (status.on) {
-            when {
-                status.connectionState === BraveVPNService.State.NEW -> {
-                    // app's starting here, but such a status confuses users
-                    // R.string.status_starting
-                    R.string.dns_connected
-                }
-                status.connectionState === BraveVPNService.State.WORKING -> {
-                    R.string.dns_connected
-                }
-                status.connectionState === BraveVPNService.State.APP_ERROR -> {
-                    R.string.status_app_error
-                }
-                status.connectionState === BraveVPNService.State.DNS_ERROR -> {
-                    R.string.status_dns_error
-                }
-                status.connectionState === BraveVPNService.State.DNS_SERVER_DOWN -> {
-                    R.string.status_dns_server_down
-                }
-                status.connectionState === BraveVPNService.State.NO_INTERNET -> {
-                    R.string.status_no_internet
-                }
-                else -> {
-                    R.string.status_failing
-                }
+        return when (Transaction.Status.fromId(status)) {
+            Transaction.Status.START -> {
+                R.string.lbl_starting
             }
-        } else {
-            R.string.rt_filter_parent_selected
+            Transaction.Status.COMPLETE -> {
+                R.string.dns_connected
+            }
+            Transaction.Status.SEND_FAIL -> {
+                R.string.status_no_internet
+            }
+            Transaction.Status.TRANSPORT_ERROR -> {
+                R.string.status_dns_server_down
+            }
+            Transaction.Status.NO_RESPONSE -> {
+                R.string.status_dns_server_down
+            }
+            Transaction.Status.BAD_RESPONSE -> {
+                R.string.status_dns_error
+            }
+            Transaction.Status.BAD_QUERY -> {
+                R.string.status_dns_error
+            }
+            Transaction.Status.CLIENT_ERROR -> {
+                R.string.status_dns_error
+            }
+            Transaction.Status.INTERNAL_ERROR -> {
+                R.string.status_failing
+            }
         }
     }
 
     fun getProxyStatusStringRes(statusId: Long): Int {
         return when (statusId) {
-            Ipn.TOK -> {
+            Backend.TUP -> {
+                R.string.lbl_starting
+            }
+            Backend.TOK -> {
                 R.string.dns_connected
             }
-            Ipn.TKO -> {
+            Backend.TZZ -> {
+                R.string.lbl_idle
+            }
+            Backend.TKO -> {
                 R.string.status_failing
             }
-            Ipn.END -> {
-                R.string.rt_filter_parent_selected
+            Backend.END -> {
+                R.string.lbl_stopped
+            }
+            Backend.TNT -> {
+                R.string.status_waiting
             }
             else -> {
                 R.string.rt_filter_parent_selected
             }
         }
-    }
-
-    fun humanReadableTime(timestamp: Long): String {
-        val offSet = TimeZone.getDefault().rawOffset + TimeZone.getDefault().dstSavings
-        val now = timestamp - offSet
-        return Utilities.convertLongToTime(now, Constants.TIME_FORMAT_1)
     }
 
     fun formatToRelativeTime(context: Context, timestamp: Long): String {
@@ -130,14 +131,8 @@ object UIUtils {
         c1.add(Calendar.DAY_OF_YEAR, -1)
         val c2 = Calendar.getInstance()
         c2.time = day
-        if (
-            c1.get(Calendar.YEAR) == c2.get(Calendar.YEAR) &&
-                c1.get(Calendar.DAY_OF_YEAR) == c2.get(Calendar.DAY_OF_YEAR)
-        ) {
-            return true
-        }
-
-        return false
+        return c1.get(Calendar.YEAR) == c2.get(Calendar.YEAR) &&
+            c1.get(Calendar.DAY_OF_YEAR) == c2.get(Calendar.DAY_OF_YEAR)
     }
 
     fun openVpnProfile(context: Context) {
@@ -156,7 +151,7 @@ object UIUtils {
                 context.getString(R.string.vpn_profile_error),
                 Toast.LENGTH_SHORT
             )
-            Log.w(LoggerConstants.LOG_TAG_VPN, "Failure opening app info: ${e.message}", e)
+            Logger.w(Logger.LOG_TAG_VPN, "Failure opening app info: ${e.message}", e)
         }
     }
 
@@ -170,26 +165,38 @@ object UIUtils {
                 context.getString(R.string.intent_launch_error, url),
                 Toast.LENGTH_SHORT
             )
-            Log.w(LoggerConstants.LOG_TAG_UI, "activity not found ${e.message}", e)
+            Logger.w(LOG_TAG_UI, "activity not found ${e.message}", e)
         }
     }
 
-    fun openNetworkSettings(context: Context) {
+    fun openNetworkSettings(context: Context, settings: String): Boolean {
+        return try {
+            val intent = Intent(settings)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            context.startActivity(intent)
+            true
+        } catch (e: ActivityNotFoundException) {
+            val msg = context.getString(R.string.intent_launch_error, settings)
+            Utilities.showToastUiCentered(context, msg, Toast.LENGTH_SHORT)
+            Logger.w(Logger.LOG_TAG_VPN, "err opening android setting: ${e.message}", e)
+            false
+        }
+    }
+
+    fun openAppInfo(context: Context) {
+        val packageName = context.packageName
         try {
-            val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS)
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            intent.data = Uri.fromParts("package", packageName, null)
             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
             context.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             Utilities.showToastUiCentered(
                 context,
-                context.getString(R.string.private_dns_error),
+                context.getString(R.string.app_info_error),
                 Toast.LENGTH_SHORT
             )
-            Log.w(
-                LoggerConstants.LOG_TAG_VPN,
-                "Failure opening network setting screen: ${e.message}",
-                e
-            )
+            Logger.w(LOG_TAG_UI, "activity not found ${e.message}", e)
         }
     }
 
@@ -228,7 +235,7 @@ object UIUtils {
             intent.data = Uri.fromParts("package", packageName, null)
             context.startActivity(intent)
         } catch (e: Exception) { // ActivityNotFoundException | NullPointerException
-            Log.w(LoggerConstants.LOG_TAG_FIREWALL, "Failure calling app info: ${e.message}", e)
+            Logger.w(Logger.LOG_TAG_FIREWALL, "Failure calling app info: ${e.message}", e)
             Utilities.showToastUiCentered(
                 context,
                 context.getString(R.string.ctbs_app_info_not_available_toast),
@@ -271,6 +278,18 @@ object UIUtils {
                 R.attr.accentGood
             } else if (attr == R.color.accentBad) {
                 R.attr.accentBad
+            } else if (attr == R.color.chipBgNeutral) {
+                R.attr.chipBgColorNeutral
+            } else if (attr == R.color.chipBgNegative) {
+                R.attr.chipBgColorNegative
+            } else if (attr == R.color.chipBgPositive) {
+                R.attr.chipBgColorPositive
+            } else if (attr == R.color.chipTextNeutral) {
+                R.attr.chipTextNeutral
+            } else if (attr == R.color.chipTextNegative) {
+                R.attr.chipTextNegative
+            } else if (attr == R.color.chipTextPositive) {
+                R.attr.chipTextPositive
             } else {
                 R.attr.chipBgColorPositive
             }
@@ -282,7 +301,7 @@ object UIUtils {
 
         if (isDgaDomain(dnsLog.queryStr)) return
 
-        if (DEBUG) Log.d(LoggerConstants.LOG_TAG_UI, "Glide - fetchFavIcon():${dnsLog.queryStr}")
+        Logger.d(Logger.LOG_TAG_UI, "Glide - fetchFavIcon():${dnsLog.queryStr}")
 
         // fetch fav icon in background using glide
         FavIconDownloader(context, dnsLog.queryStr).run()
@@ -569,7 +588,7 @@ object UIUtils {
                 "🇿🇲" to "Zambia",
                 "🇿🇼" to "Zimbabwe"
             )
-        return flagCodePoints[flag] ?: "Unknown"
+        return flagCodePoints[flag] ?: "--"
     }
 
     fun getAccentColor(appTheme: Int): Int {
@@ -580,5 +599,37 @@ object UIUtils {
             Themes.TRUE_BLACK.id -> R.color.accentGoodBlack
             else -> R.color.accentGoodBlack
         }
+    }
+
+    // get time in seconds and add "sec" or "min" or "hr" or "day" accordingly
+    fun getDurationInHumanReadableFormat(context: Context, inputSeconds: Int): String {
+        // calculate the time in seconds and return the value in seconds or minutes or hours or days
+        val secondsInMinute = 60
+        val secondsInHour = 3600
+        val secondsInDay = 86400
+
+        val days = inputSeconds / secondsInDay
+        val remainingSecondsAfterDays = inputSeconds % secondsInDay
+        val hours = remainingSecondsAfterDays / secondsInHour
+        val remainingSecondsAfterHours = remainingSecondsAfterDays % secondsInHour
+        val minutes = remainingSecondsAfterHours / secondsInMinute
+        val seconds = remainingSecondsAfterHours % secondsInMinute
+
+        val result = StringBuilder()
+
+        if (days > 0) {
+            result.append("$days ${context.getString(R.string.lbl_day)} ")
+        }
+        if (hours > 0) {
+            result.append("$hours ${context.getString(R.string.lbl_hour)} ")
+        }
+        if (minutes > 0) {
+            result.append("$minutes ${context.getString(R.string.lbl_min)} ")
+        }
+        if (seconds > 0 || (days == 0 && hours == 0 && minutes == 0)) {
+            result.append("$seconds ${context.getString(R.string.lbl_sec)} ")
+        }
+
+        return result.toString().trim()
     }
 }

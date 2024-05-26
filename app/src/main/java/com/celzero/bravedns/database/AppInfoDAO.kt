@@ -17,7 +17,12 @@ package com.celzero.bravedns.database
 
 import android.database.Cursor
 import androidx.paging.PagingSource
-import androidx.room.*
+import androidx.room.Dao
+import androidx.room.Delete
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Update
 import com.celzero.bravedns.data.DataUsage
 
 @Dao
@@ -26,16 +31,25 @@ interface AppInfoDAO {
     @Update fun update(appInfo: AppInfo): Int
 
     @Query(
-        "update AppInfo set firewallStatus = :firewallStatus, connectionStatus = :connectionStatus where uid = :uid"
+        "update AppInfo set firewallStatus = :firewallStatus, connectionStatus = :connectionStatus where uid = :uid and packageName != 'com.celzero.bravedns'"
     )
     fun updateFirewallStatusByUid(uid: Int, firewallStatus: Int, connectionStatus: Int)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) fun insert(appInfo: AppInfo): Long
 
+    @Query("update AppInfo set uid = :newUid where uid = :oldUid and packageName = :pkg")
+    fun updateUid(oldUid: Int, pkg: String, newUid: Int): Int
+
+    @Query("select * from AppInfo where uid = :uid and packageName = :pkg")
+    fun isUidPkgExist(uid: Int, pkg: String): AppInfo?
+
     @Delete fun delete(appInfo: AppInfo)
 
     @Query("delete from AppInfo where packageName in (:packageNames)")
     fun deleteByPackageName(packageNames: List<String>)
+
+    @Query("delete from AppInfo where uid = :uid and packageName = :packageName")
+    fun deletePackage(uid: Int, packageName: String)
 
     @Query("select * from AppInfo order by appCategory, uid") fun getAllAppDetails(): List<AppInfo>
 
@@ -135,4 +149,7 @@ interface AppInfoDAO {
         "update AppInfo set  uploadBytes = :uploadBytes, downloadBytes = :downloadBytes where uid = :uid"
     )
     fun updateDataUsageByUid(uid: Int, uploadBytes: Long, downloadBytes: Long)
+
+    @Query("update AppInfo set isProxyExcluded = :isProxyExcluded where uid = :uid")
+    fun updateProxyExcluded(uid: Int, isProxyExcluded: Boolean)
 }

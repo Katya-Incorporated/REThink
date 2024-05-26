@@ -37,12 +37,12 @@ interface WgConfigFilesDAO {
     @Insert(onConflict = OnConflictStrategy.REPLACE) fun insert(wgConfigFiles: WgConfigFiles): Long
 
     @Query(
-        "select * from WgConfigFiles where id != $SEC_WARP_ID and id != $WARP_ID order by id desc"
+        "select * from WgConfigFiles where id != $SEC_WARP_ID and id != $WARP_ID order by isActive desc"
     )
     fun getWgConfigsLiveData(): PagingSource<Int, WgConfigFiles>
 
     @Query(
-        "select * from WgConfigFiles where id != $SEC_WARP_ID and id != $WARP_ID order by id desc"
+        "select * from WgConfigFiles where id != $SEC_WARP_ID and id != $WARP_ID order by isActive desc"
     )
     fun getWgConfigs(): List<WgConfigFiles>
 
@@ -55,10 +55,20 @@ interface WgConfigFilesDAO {
 
     @Query("delete from WgConfigFiles where id = :id") fun deleteConfig(id: Int)
 
+    @Query("update WgConfigFiles set isCatchAll = :isCatchAll, oneWireGuard = 0 where id = :id")
+    fun updateCatchAllConfig(id: Int, isCatchAll: Boolean)
+
+    @Query("update WgConfigFiles set oneWireGuard = :oneWireGuard where id = :id")
+    fun updateOneWireGuardConfig(id: Int, oneWireGuard: Boolean)
+
+    @Query("update WgConfigFiles set isLockdown = :isLockdown where id = :id")
+    fun updateLockdownConfig(id: Int, isLockdown: Boolean)
+
     @Query("select * from WgConfigFiles where id = :id") fun isConfigAdded(id: Int): WgConfigFiles?
 
     @Query("select count(id) from WgConfigFiles where id != $SEC_WARP_ID and id != $WARP_ID")
     fun getConfigCount(): LiveData<Int>
 
-    @Query("update WgConfigFiles set isActive = 0 where id = :id") fun disableConfig(id: Int)
+    @Query("update WgConfigFiles set isActive = 0, oneWireGuard = 0 where id = :id")
+    fun disableConfig(id: Int)
 }
